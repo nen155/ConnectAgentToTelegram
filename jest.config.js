@@ -5,6 +5,6 @@ module.exports = {
   roots: ['<rootDir>/tests'],
   moduleFileExtensions: ['ts', 'js', 'json'],
   transform: {
-    '^.+\\.ts$': ['ts-jest', { tsconfig: { module: 'commonjs', target: 'ES2022', esModuleInterop: true } }]
+    '^.+\\.ts$': ['ts-jest', { tsconfig: { target: 'ES2022', esModuleInterop: true } }]
   }
 };
