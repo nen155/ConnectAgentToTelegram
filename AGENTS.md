@@ -17,7 +17,7 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
 | `npm run tray:lint` | valida la sintaxis de `scripts/tray.ps1` |
 | `npm run tray:install` / `tray:uninstall` | alta/baja del arranque con Windows |
 | `npm run typecheck` | `tsc --noEmit` (obligatorio antes de dar algo por terminado) |
-| `npm test` | jest + ts-jest (101 pruebas) |
+| `npm test` | jest + ts-jest (96 pruebas) |
 | `npm run smoke` | pipeline de audio real: TTS -> OGG/Opus -> whisper.cpp -> texto |
 | `npm run check:telegram` | valida el token del bot y avisa si hay webhook (incompatible con long polling) |
 | `npm run check:devin` | ejecuta una orden real por el mismo runner que usa el bot |
@@ -72,20 +72,18 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
   "La propiedad 'Text' no se encuentra en este objeto".
 - PowerShell 5.1 no tiene operador ternario (`? :`): usar if/else.
 - El historial de tareas (`TaskRegistry`) es en memoria; `data/status.json` es la unica interfaz con la
-  bandeja (fase actual + `active` + `recent`).
-- El panel lista tambien procesos reales (`Get-DevinProcesses`): solo el **proceso principal** de
-  `...\Programs\Devin\Devin.exe` y los `...\devin\cli\bin\devin.exe`. Los subprocesos de Chromium del
-  IDE (`--type=renderer`, `--type=gpu-process`, `--require=...`) se descartan: sin ese filtro salen
-  mas de 30 filas de ruido. Las sesiones de Devin Desktop y Cloud **no** son procesos locales, asi
-  que no aparecen ahi.
+  bandeja (fase actual + `active` + `recent` + `sessions`).
 - `data/` y `vendor/` estan en `.gitignore`; el modelo `small` pesa ~465 MB.
 - **Base de sesiones del CLI** (`%APPDATA%\devin\cli\sessions.db`): tablas `sessions`
   (`id`, `working_directory`, `created_at` y `last_activity_at` en **segundos**, `title`) y
   `message_nodes` (`session_id`, `chat_message` con JSON `{role, content}`). Se lee con `node:sqlite`
-  (experimental, funciona sin flag en Node 22) para resumir tareas externas. `devin.exe` lanza un
-  proceso hijo que tambien coincide con el filtro: se descarta por relacion padre-hijo o la tarea
-  se contaria dos veces.
-- Las sesiones de Devin Desktop y Cloud no son procesos locales: no aparecen ni generan avisos.
+  (experimental, funciona sin flag en Node 22).
+- **Las sesiones del IDE tambien estan en esa base** (`backend_type: windsurf`), con titulo y carpeta:
+  no hay que mirar procesos. `src/core/sessionMonitor.ts` publica el estado y avisa cuando un turno
+  termina (≈20 s sin actividad y ultimo mensaje del asistente). La primera lectura solo toma linea
+  base y las sesiones del propio puente se excluyen por id (`SessionStore`).
+- `live_row_times` y `tool_call_state` existen pero no son fiables para "en curso": se usa
+  `last_activity_at` con ventana de 60 s.
 
 ## Convenciones del proyecto
 

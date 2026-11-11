@@ -10,6 +10,7 @@ import type { SessionStore } from '../devin/sessionStore';
 import type { KeyedQueue } from './taskQueue';
 import type { BridgeState, StatusPublisher } from './statusPublisher';
 import { TaskRegistry, type TaskRecord } from './taskRegistry';
+import type { SessionSnapshot } from './sessionMonitor';
 import { formatDuration } from '../util/format';
 
 export { formatDuration };
@@ -17,12 +18,6 @@ export { formatDuration };
 export interface Notifier {
   text(message: string): Promise<void>;
   voice(filePath: string): Promise<void>;
-}
-
-/** Tareas detectadas fuera del puente (agentes de Devin CLI lanzados a mano). */
-export interface ExternalTasksProvider {
-  active(): TaskRecord[];
-  recent(): TaskRecord[];
 }
 
 export interface BridgeDeps {
@@ -34,7 +29,8 @@ export interface BridgeDeps {
   config: AppConfig;
   logger: Logger;
   status?: Pick<StatusPublisher, 'publish'>;
-  external?: ExternalTasksProvider;
+  /** Sesiones de Devin (IDE y CLI) para publicarlas en el panel. */
+  sessions?: () => SessionSnapshot[];
 }
 
 /** Formatea duraciones cortas para el resumen. */
@@ -177,30 +173,20 @@ export class CommandBridge {
     if (active.some((task) => task.state === 'working')) return 'working';
     if (active.some((task) => task.state === 'replying')) return 'replying';
     if (active.length > 0) return 'working';
-    if ((this.deps.external?.active() ?? []).length > 0) return 'working';
     return 'idle';
   }
 
   private async publishStatus(state?: BridgeState): Promise<void> {
     const { active, recent } = this.registry.snapshot();
-    const externalActive = this.deps.external?.active() ?? [];
-    const externalRecent = this.deps.external?.recent() ?? [];
-
-    const allActive = [...externalActive, ...active];
-    const allRecent = [...recent, ...externalRecent]
-      .sort((a, b) => (b.finishedAt ?? b.queuedAt) - (a.finishedAt ?? a.queuedAt))
-      .slice(0, 8);
-
     const current =
-      active.find((task) => task.state === 'working') ??
-      active.find((task) => task.state === 'replying') ??
-      externalActive[0];
+      active.find((task) => task.state === 'working') ?? active.find((task) => task.state === 'replying');
 
     await this.deps.status?.publish(state ?? this.computeState(), {
-      active: allActive,
-      recent: allRecent,
+      active,
+      recent,
       current,
-      queue: active.filter((task) => task.state === 'queued').length
+      queue: active.filter((task) => task.state === 'queued').length,
+      sessions: this.deps.sessions?.() ?? []
     });
   }
 

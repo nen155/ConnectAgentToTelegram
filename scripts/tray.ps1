@@ -121,6 +121,17 @@ function Get-ActivityText {
     $current = $status.current
     if (-not $current) {
         if ($status.queue -gt 0) { return ("{0} orden(es) en cola" -f $status.queue) }
+
+        $workingSessions = @()
+        if ($status.sessions) {
+            $workingSessions = @($status.sessions | Where-Object { $_.state -eq 'working' })
+        }
+        if ($workingSessions.Count -gt 0) {
+            $first = $workingSessions[0]
+            $title = $first.title
+            if (-not $title) { $title = $first.id }
+            return "Otra sesion trabajando: $(Limit-Text $title 38)"
+        }
         return 'En espera de ordenes'
     }
 
@@ -128,12 +139,9 @@ function Get-ActivityText {
     $suffix = ''
     if ($elapsed) { $suffix = " ($elapsed)" }
 
-    $prefix = 'Devin trabajando'
-    if ($current.source -eq 'external') { $prefix = 'Otra sesion de Devin' }
-
     switch ($current.state) {
         'replying' { return "Enviando respuesta$suffix" }
-        default { return "$prefix$suffix`: $(Limit-Text $current.prompt 45)" }
+        default { return "Devin trabajando$suffix`: $(Limit-Text $current.prompt 45)" }
     }
 }
 
@@ -172,46 +180,15 @@ function Get-TaskStateColor([string]$State) {
     }
 }
 
-# Procesos de Devin vivos en la maquina. Se descartan los subprocesos de Chromium del IDE
-# (--type=renderer, --type=gpu-process, --require=...), que inundarian la lista sin aportar nada.
-function Get-DevinProcesses {
-    try {
-        $procs = Get-CimInstance Win32_Process -Filter "Name='devin.exe'" -ErrorAction Stop
-    } catch {
-        return @()
-    }
+# Estado de una sesion de Devin tal y como lo publica el puente en status.json.
+function Get-SessionStateLabel($Session) {
+    if ($Session.state -eq 'working') { return 'Trabajando' }
+    return 'En pausa'
+}
 
-    $result = @()
-    foreach ($proc in $procs) {
-        $path = $proc.ExecutablePath
-        $cmd = $proc.CommandLine
-        if (-not $path) { continue }
-
-        $kind = $null
-        if ($path -like '*\devin\cli\bin\devin.exe') {
-            $kind = 'Devin CLI'
-        } elseif ($path -like '*\Programs\Devin\Devin.exe') {
-            # Solo el proceso principal del IDE: sin argumentos ni subprocesos auxiliares.
-            $trimmed = $cmd.Trim()
-            $quoted = '"' + $path + '"'
-            if ($trimmed -ne $quoted -and $trimmed -ne $path) { continue }
-            $kind = 'Devin Desktop'
-        } else {
-            continue
-        }
-
-        $startMs = 0
-        if ($proc.CreationDate) {
-            $startMs = ([DateTimeOffset]$proc.CreationDate).ToUnixTimeMilliseconds()
-        }
-        $result += [pscustomobject]@{
-            Pid = $proc.ProcessId
-            Kind = $kind
-            Command = $cmd
-            StartMs = $startMs
-        }
-    }
-    return $result
+function Get-SessionStateColor($Session) {
+    if ($Session.state -eq 'working') { return [System.Drawing.Color]::FromArgb(211, 84, 0) }
+    return [System.Drawing.Color]::FromArgb(127, 140, 141)
 }
 
 function New-DotIcon([System.Drawing.Color]$Color) {
@@ -469,7 +446,7 @@ function Show-Dashboard {
     [void]$list.Columns.Add('Sesion', 120)
     $groupActive = New-Object System.Windows.Forms.ListViewGroup 'Tareas en curso'
     $groupRecent = New-Object System.Windows.Forms.ListViewGroup 'Tareas recientes'
-    $groupProcs = New-Object System.Windows.Forms.ListViewGroup 'Procesos de Devin en el sistema (CLI y escritorio)'
+    $groupProcs = New-Object System.Windows.Forms.ListViewGroup 'Sesiones de Devin (IDE y CLI)'
     [void]$list.Groups.Add($groupActive)
     [void]$list.Groups.Add($groupRecent)
     [void]$list.Groups.Add($groupProcs)
@@ -548,9 +525,11 @@ function Show-Dashboard {
 
             $activeTasks = @()
             $recentTasks = @()
+            $sessionList = @()
             if ($status) {
                 if ($status.active) { $activeTasks = @($status.active) }
                 if ($status.recent) { $recentTasks = @($status.recent) }
+                if ($status.sessions) { $sessionList = @($status.sessions) }
             }
 
             if ($activeTasks.Count -eq 0) {
@@ -563,7 +542,6 @@ function Show-Dashboard {
             foreach ($task in $activeTasks) {
                 $item = New-Object System.Windows.Forms.ListViewItem((Limit-Text $task.prompt 160))
                 $stateLabel = Get-TaskStateLabel $task.state
-                if ($task.source -eq 'external') { $stateLabel = "Otra sesion - $stateLabel" }
                 [void]$item.SubItems.Add($stateLabel)
                 $elapsed = Format-Elapsed $task.startedAt
                 if (-not $elapsed) { $elapsed = '-' }
@@ -586,7 +564,6 @@ function Show-Dashboard {
                 if ($task.error) { $label = $label + ' -> ' + (Limit-Text $task.error 60) }
                 $item = New-Object System.Windows.Forms.ListViewItem($label)
                 $stateLabel = Get-TaskStateLabel $task.state
-                if ($task.source -eq 'external') { $stateLabel = "Otra sesion - $stateLabel" }
                 [void]$item.SubItems.Add($stateLabel)
                 [void]$item.SubItems.Add((Format-Duration $task.durationMs))
                 if ($task.sessionId) { [void]$item.SubItems.Add($task.sessionId) } else { [void]$item.SubItems.Add('-') }
@@ -595,23 +572,25 @@ function Show-Dashboard {
                 [void]$listView.Items.Add($item)
             }
 
-            $devinProcs = Get-DevinProcesses
+            $devinProcs = $sessionList
             if ($devinProcs.Count -eq 0) {
-                $emptyProcs = New-Object System.Windows.Forms.ListViewItem 'No hay procesos de Devin en ejecucion'
+                $emptyProcs = New-Object System.Windows.Forms.ListViewItem 'No hay sesiones de Devin recientes'
                 $emptyProcs.Group = $script:dashGroupProcs
                 $emptyProcs.ForeColor = [System.Drawing.Color]::Gray
                 [void]$listView.Items.Add($emptyProcs)
             }
 
-            foreach ($proc in $devinProcs) {
-                $label = $proc.Command
-                if (-not $label) { $label = $proc.Kind }
+            foreach ($session in $devinProcs) {
+                $label = $session.title
+                if (-not $label) { $label = $session.id }
                 $item = New-Object System.Windows.Forms.ListViewItem((Limit-Text $label 160))
-                [void]$item.SubItems.Add($proc.Kind)
-                [void]$item.SubItems.Add((Format-Elapsed $proc.StartMs))
-                [void]$item.SubItems.Add("PID $($proc.Pid)")
+                [void]$item.SubItems.Add((Get-SessionStateLabel $session))
+                $ago = Format-Elapsed $session.lastActivityAt
+                if (-not $ago) { $ago = '-' }
+                [void]$item.SubItems.Add("hace $ago")
+                [void]$item.SubItems.Add($session.id)
                 $item.Group = $script:dashGroupProcs
-                $item.ForeColor = [System.Drawing.Color]::FromArgb(52, 73, 94)
+                $item.ForeColor = Get-SessionStateColor $session
                 [void]$listView.Items.Add($item)
             }
 

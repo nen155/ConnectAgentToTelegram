@@ -22,8 +22,9 @@ llega al modelo, igual que si la escribieras en la terminal.
 - **Respuesta en audio** con las voces de Windows (System.Speech) y conversión a OGG/Opus.
 - **Hilo de conversación por chat**: cada chat mantiene su sesión del agente (`--resume`).
 - **Cola por chat**: si mandas varias órdenes seguidas, se ejecutan en orden y te avisa de la posición.
-- **Aviso de tareas externas**: si lanzas un agente de Devin CLI por tu cuenta (en otra terminal), el
-  puente lo detecta y te avisa por Telegram al terminar, **con el resumen de lo que hizo**.
+- **Sesiones de Devin a la vista**: el puente lee la base de sesiones del CLI y muestra en el panel
+  todas las sesiones recientes (del IDE y del CLI) con su estado; cuando una termina su turno, te
+  avisa por Telegram **con el resumen de lo que hizo**.
 - **Bandeja del sistema**: icono con estado, panel de actividad (doble clic) y control de
   iniciar / detener / reiniciar. Arranque automático con Windows.
 - **Instancia única**: dos procesos con el mismo token provocarían `409 Conflict` en Telegram.
@@ -117,23 +118,29 @@ entre sí.
 
 Al terminar, el resumen cierra con `🟢 Esperando nuevas ordenes.` o `⏳ Quedan N orden(es) en cola.`
 
-### Avisos de tareas lanzadas fuera del puente
+### Sesiones de Devin: estado y avisos
 
-El puente vigila cada 5 s los procesos del CLI de Devin (`devin.exe`) que no ha lanzado él. Cuando
-uno termina, te manda un mensaje con la duración, la orden y **el resumen que produjo**, leído de la
-base de sesiones del CLI:
+Devin guarda todas sus sesiones (las del IDE y las del CLI) en una base SQLite local. El puente la
+lee cada 5 s y con eso sabe **qué se está trabajando y cuándo termina**:
+
+- En el panel aparecen todas las sesiones recientes con título, estado (`Trabajando` / `En pausa`),
+  tiempo desde la última actividad y su id.
+- Cuando una sesión lleva ~20 s sin actividad y su último mensaje es del asistente, se considera que
+  el turno ha terminado y te llega un aviso:
 
 ```
-✅ Tarea de Devin terminada (otra sesion, no lanzada desde Telegram)
-Duracion: 41s
-Orden: "Cuenta cuantas secciones tiene el README..."
+✅ Sesion de Devin terminada
+Proyecto: ConnectAgentToTelegram
+Sesion: ConnectAgentToTelegram: conectar agente a Telegram
+Sin actividad desde hace 24s
 
-Resumen de lo que hizo:
-El README tiene 14 lineas que empiezan por ## (13 secciones de nivel 2 ...)
+Resumen de lo ultimo que hizo:
+He publicado el repositorio y creado el aviso de sesiones...
 ```
 
-Las órdenes que lanza el propio bot no generan este aviso: ya tienen su resumen normal. Si no se
-puede leer la base de sesiones, el aviso llega igualmente, indicando que no hubo resumen.
+Las órdenes que lanza el propio bot se excluyen: ya reciben su resumen normal, sin duplicados.
+La primera lectura solo toma línea base, así que al arrancar no te avisa de lo que ya estaba
+terminado. Si la base no se puede leer, el panel y los avisos simplemente no muestran sesiones.
 
 ## Bandeja del sistema (Windows)
 
@@ -148,8 +155,8 @@ agente y cuánto lleva. **Doble clic** abre el panel de actividad:
 - **Tareas en curso**: cada orden con su estado (`Trabajando`, `En cola`, `Respondiendo`), tiempo y
   sesión. Las que no lanzó el bot aparecen como `Otra sesion - Trabajando`.
 - **Tareas recientes**: últimas 8 con duración, sesión y el error si falló.
-- **Procesos de Devin en el sistema**: los `devin.exe` del CLI y el proceso principal del IDE, con PID
-  y tiempo en marcha.
+- **Sesiones de Devin (IDE y CLI)**: todas las sesiones recientes con su título, estado y tiempo desde
+  la última actividad.
 - Casilla **Iniciar con Windows** para activar o quitar el arranque automático sin salir del panel.
 - Botones para actualizar, reiniciar o detener el puente y abrir el log.
 
@@ -264,9 +271,11 @@ Los logs están en `data/logs/bridge.log` y `data/logs/tray.log`.
   (`transcribeMs`, `devinMs`, `ttsMs`) en el log.
 - **WhatsApp no implementado**: el núcleo (`src/core/bridge.ts`) recibe un `Notifier`, no conoce
   Telegram; añadir otro canal es escribir un adaptador.
-- **Solo se ven agentes CLI**: las sesiones de Devin Desktop y Devin Cloud no son procesos locales, así
-  que no aparecen en el panel ni generan avisos. El resumen de una tarea externa se lee de la base de
-  sesiones del CLI (`node:sqlite`, aún experimental en Node).
+- **El estado de una sesión es una heurística**: se considera "trabajando" si hubo actividad en los
+  últimos 60 s y "terminada" tras ~20 s sin actividad con un mensaje final del asistente. Una sesión
+  abierta pero ociosa puede aparecer como "En pausa" sin haber terminado nada.
+- **El resumen se lee de la base de sesiones del CLI** (`node:sqlite`, aún experimental en Node). Si
+  cambia el esquema en una versión futura, el panel y los avisos dejan de mostrar sesiones.
 - **TTS y bandeja son de Windows**: en Linux/macOS el bot funciona, pero sin voz de vuelta ni icono.
 
 ## Licencia

@@ -4,8 +4,7 @@ import { loadConfig } from './config';
 import { createLogger } from './logger';
 import { KeyedQueue } from './core/taskQueue';
 import { CommandBridge } from './core/bridge';
-import { ExternalAgentWatcher, formatExternalTask, type ExternalTask } from './core/externalAgents';
-import { readFinishedSession } from './core/sessionDigest';
+import { SessionMonitor, formatFinishedSession, type SessionSnapshot } from './core/sessionMonitor';
 import { StatusPublisher } from './core/statusPublisher';
 import { acquireLock, releaseLock } from './core/singleInstance';
 import { SessionStore } from './devin/sessionStore';
@@ -95,15 +94,23 @@ async function main(): Promise<void> {
   const status = new StatusPublisher(config.paths.statusFile);
   await status.publish('idle');
 
-  // El vigilante y el puente se necesitan mutuamente: se enlazan por estas funciones.
-  let notifyExternalTask: (task: ExternalTask) => void = () => undefined;
+  // El monitor y el puente se necesitan mutuamente: se enlazan por estas funciones.
+  let notifyFinishedSession: (session: SessionSnapshot) => void = () => undefined;
   let refreshStatus: () => void = () => undefined;
 
-  const watcher = new ExternalAgentWatcher({
+  const monitor = new SessionMonitor({
+    dbPath: config.devin.sessionsDb,
     logger,
-    excludePid: process.pid,
-    onFinished: (task) => notifyExternalTask(task),
-    onChanged: () => refreshStatus()
+    onFinished: (session) => notifyFinishedSession(session),
+    onChanged: () => refreshStatus(),
+    // Las sesiones que lanza el propio bot ya reciben su resumen normal.
+    ignoreIds: () =>
+      new Set(
+        store
+          .list()
+          .map(([, session]) => session.sessionId)
+          .filter((id): id is string => Boolean(id))
+      )
   });
 
   const bridge = new CommandBridge({
@@ -115,38 +122,28 @@ async function main(): Promise<void> {
     config,
     logger,
     status,
-    external: { active: () => watcher.active(), recent: () => watcher.recent() }
+    sessions: () => monitor.sessions()
   });
   refreshStatus = () => void bridge.refreshStatus();
 
   const bot = createTelegramBot({ config, bridge, store, queue, logger });
 
-  notifyExternalTask = (task) => {
-    // Best-effort: la base de sesiones del CLI nos da el ultimo mensaje del agente.
-    const digest = readFinishedSession(config.devin.sessionsDb, {
-      startedAtMs: task.startedAt,
-      finishedAtMs: task.finishedAt ?? Date.now()
-    });
-
-    const text = formatExternalTask(task, digest);
-    logger.info('Aviso de tarea externa', {
-      tarea: task.id,
-      sesion: digest?.id ?? null,
-      resumenChars: digest?.summary?.length ?? 0
-    });
+  notifyFinishedSession = (session) => {
+    const text = formatFinishedSession(session);
+    logger.info('Aviso de sesion terminada', { sesion: session.id, resumenChars: session.lastText.length });
 
     for (const chatId of config.telegram.allowedUserIds) {
       void bot.api.sendMessage(chatId, text).catch((error: unknown) => {
-        logger.warn('No pude avisar de la tarea externa', error);
+        logger.warn('No pude avisar de la sesion terminada', error);
       });
     }
   };
 
-  watcher.start();
+  monitor.start();
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info(`Recibido ${signal}; cerrando`);
-    watcher.stop();
+    monitor.stop();
     await bot.stop().catch(() => undefined);
     await status.publish('idle');
     await release();
