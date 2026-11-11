@@ -4,7 +4,13 @@ import { loadConfig } from './config';
 import { createLogger } from './logger';
 import { KeyedQueue } from './core/taskQueue';
 import { CommandBridge } from './core/bridge';
-import { SessionMonitor, formatFinishedSession, type SessionSnapshot } from './core/sessionMonitor';
+import {
+  SessionMonitor,
+  findProjectSession,
+  formatFinishedSession,
+  readSessions,
+  type SessionSnapshot
+} from './core/sessionMonitor';
 import { StatusPublisher } from './core/statusPublisher';
 import { acquireLock, releaseLock } from './core/singleInstance';
 import { SessionStore } from './devin/sessionStore';
@@ -122,7 +128,20 @@ async function main(): Promise<void> {
     config,
     logger,
     status,
-    sessions: () => monitor.sessions()
+    sessions: () => monitor.sessions(),
+    resolveIdeSession: async () => {
+      const sessions = readSessions(config.devin.sessionsDb, { limit: 20, withinMs: 24 * 60 * 60 * 1000 });
+      const ownSessions = new Set(
+        store
+          .list()
+          .map(([, session]) => session.sessionId)
+          .filter((id): id is string => Boolean(id))
+      );
+
+      const match = findProjectSession(sessions, config.devin.workdir, ownSessions);
+      if (!match) return null;
+      return { id: match.id, title: match.title, busy: match.state === 'working' };
+    }
   });
   refreshStatus = () => void bridge.refreshStatus();
 

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createLogger } from '../src/logger';
-import { formatFinishedSession, readSessions, SessionMonitor, type SessionSnapshot } from '../src/core/sessionMonitor';
+import { formatFinishedSession, findProjectSession, readSessions, SessionMonitor, type SessionSnapshot } from '../src/core/sessionMonitor';
 
 const logger = createLogger({ level: 'error' });
 
@@ -211,5 +211,27 @@ describe('formatFinishedSession', () => {
     expect(text).toContain('Silver');
     expect(text).toContain('Pasar contenido a la web');
     expect(text).toContain('Converti los SMK');
+  });
+});
+
+describe('findProjectSession', () => {
+  const sessions = [
+    snapshot({ id: 'visual-hacksaw', cwd: 'I:\\Juegos\\Silver' }),
+    snapshot({ id: 'vine-opera', cwd: 'F:\\Mis documentos\\GitHub\\ConnectAgentToTelegram' }),
+    snapshot({ id: 'excessive-grill', cwd: 'F:\\Mis documentos\\GitHub\\OrdersByWhatsapp' })
+  ];
+
+  it('encuentra la sesion del proyecto sin distinguir mayusculas ni barras', () => {
+    const match = findProjectSession(sessions, 'f:/mis documentos/github/connectagenttotelegram/');
+    expect(match?.id).toBe('vine-opera');
+  });
+
+  it('devuelve null si el proyecto no tiene sesion', () => {
+    expect(findProjectSession(sessions, 'C:\\otro')).toBeNull();
+  });
+
+  it('descarta las sesiones que gestiona el puente', () => {
+    const match = findProjectSession(sessions, 'F:\\Mis documentos\\GitHub\\ConnectAgentToTelegram', new Set(['vine-opera']));
+    expect(match).toBeNull();
   });
 });

@@ -20,6 +20,14 @@ export interface Notifier {
   voice(filePath: string): Promise<void>;
 }
 
+/** Sesion del IDE que corresponde al proyecto donde trabaja el puente. */
+export interface IdeSessionRoute {
+  id: string;
+  title: string;
+  /** true si esa sesion esta trabajando ahora mismo: no se le mete otra orden. */
+  busy: boolean;
+}
+
 export interface BridgeDeps {
   runner: Pick<DevinRunner, 'run'>;
   transcriber: Pick<Transcriber, 'transcribe' | 'name'>;
@@ -31,14 +39,17 @@ export interface BridgeDeps {
   status?: Pick<StatusPublisher, 'publish'>;
   /** Sesiones de Devin (IDE y CLI) para publicarlas en el panel. */
   sessions?: () => SessionSnapshot[];
+  /** Resuelve la sesion del IDE para el proyecto configurado, si existe. */
+  resolveIdeSession?: () => Promise<IdeSessionRoute | null>;
 }
 
 /** Formatea duraciones cortas para el resumen. */
-export function buildSummary(text: string, durationMs: number, pending = 0): string {
+export function buildSummary(text: string, durationMs: number, pending = 0, note?: string): string {
   const body = text.trim() || 'Termine la tarea, pero no produje texto de resumen.';
   const tail =
     pending > 0 ? `\n\n⏳ Quedan ${pending} orden(es) en cola.` : '\n\n🟢 Esperando nuevas ordenes.';
-  return `✅ Listo en ${formatDuration(durationMs)}\n\n${body}${tail}`;
+  const header = `✅ Listo en ${formatDuration(durationMs)}${note ? `\n${note}` : ''}`;
+  return `${header}\n\n${body}${tail}`;
 }
 
 /**
@@ -113,7 +124,20 @@ export class CommandBridge {
 
         const session = this.deps.store.get(chatId);
         const continuity = config.devin.continuity;
-        const sessionId = continuity === 'new' ? undefined : session?.sessionId;
+        let sessionId = continuity === 'new' ? undefined : session?.sessionId;
+        let note: string | undefined;
+
+        // Enrutado: si el proyecto esta abierto en el IDE, la orden continua esa conversacion.
+        if (config.devin.route === 'auto' && this.deps.resolveIdeSession) {
+          const ide = await this.deps.resolveIdeSession().catch(() => null);
+          if (ide && !ide.busy) {
+            sessionId = ide.id;
+            note = `🔗 Continuando la sesion del IDE: ${ide.title || ide.id}`;
+          } else if (ide?.busy) {
+            note = '⚠️ La sesion del IDE para este proyecto esta trabajando; abro una sesion nueva.';
+          }
+        }
+
         const allowContinue =
           !sessionId && (continuity === 'continue' || (continuity === 'auto' && (session?.runs ?? 0) > 0));
 
@@ -132,7 +156,7 @@ export class CommandBridge {
         });
 
         const pending = Math.max(0, queue.pendingFor(chatId) - 1);
-        const summary = buildSummary(result.text, result.durationMs, pending);
+        const summary = buildSummary(result.text, result.durationMs, pending, note);
         await notifier.text(summary);
 
         this.registry.update(task.id, { state: 'replying', sessionId: result.sessionId });

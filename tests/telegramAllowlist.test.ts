@@ -11,7 +11,7 @@ type TelegramUpdate = Parameters<BotInstance['handleUpdate']>[0];
 function makeConfig(allowed: number[]): AppConfig {
   return {
     telegram: { token: '123:token-de-prueba', allowedUserIds: allowed },
-    devin: { bin: 'devin', workdir: '.', permissionMode: 'dangerous', timeoutMs: 1000, continuity: 'auto', extraArgs: [], sessionsDb: 'sessions.db' },
+    devin: { bin: 'devin', workdir: '.', permissionMode: 'dangerous', timeoutMs: 1000, continuity: 'auto', route: 'auto', extraArgs: [], sessionsDb: 'sessions.db' },
     whisper: { bin: 'w', model: 'm', language: 'es', threads: 1, timeoutMs: 1000 },
     tts: { enabled: false, rate: 0, maxChars: 100 },
     ffmpegBin: 'ffmpeg',

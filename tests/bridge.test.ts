@@ -16,6 +16,7 @@ function makeConfig(tmpDir: string): AppConfig {
       permissionMode: 'dangerous',
       timeoutMs: 1000,
       continuity: 'auto',
+      route: 'auto',
       extraArgs: [],
       sessionsDb: path.join(tmpDir, 'sessions.db')
     },
@@ -51,7 +52,12 @@ function makeNotifier(): Notifier & { texts: string[]; voices: string[] } {
 }
 
 async function setup(
-  overrides: { run?: jest.Mock; synthesize?: jest.Mock; transcribe?: jest.Mock } = {}
+  overrides: {
+    run?: jest.Mock;
+    synthesize?: jest.Mock;
+    transcribe?: jest.Mock;
+    resolveIdeSession?: () => Promise<{ id: string; title: string; busy: boolean } | null>;
+  } = {}
 ) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bridge-'));
   const config = makeConfig(tmpDir);
@@ -73,7 +79,8 @@ async function setup(
     queue: new KeyedQueue(),
     config,
     logger: createLogger({ level: 'error' }),
-    status: { publish }
+    status: { publish },
+    ...(overrides.resolveIdeSession ? { resolveIdeSession: overrides.resolveIdeSession } : {})
   });
 
   return { bridge, config, store, run, synthesize, transcribe, publish, tmpDir };
@@ -101,6 +108,41 @@ describe('CommandBridge', () => {
     await bridge.handlePrompt('42', 'segunda', notifier);
 
     expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'brisk-otter' }));
+  });
+
+  it('reanuda la sesion del IDE cuando el proyecto esta abierto alli', async () => {
+    const { bridge, run } = await setup({
+      resolveIdeSession: async () => ({ id: 'visual-hacksaw', title: 'Pasar contenido a la web', busy: false })
+    });
+    const notifier = makeNotifier();
+
+    await bridge.handlePrompt('42', 'sigue con eso', notifier);
+
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'visual-hacksaw' }));
+    expect(notifier.texts.join(' ')).toContain('Continuando la sesion del IDE');
+  });
+
+  it('no invade la sesion del IDE si esta trabajando', async () => {
+    const { bridge, run } = await setup({
+      resolveIdeSession: async () => ({ id: 'visual-hacksaw', title: 'Pasar contenido a la web', busy: true })
+    });
+    const notifier = makeNotifier();
+
+    await bridge.handlePrompt('42', 'sigue con eso', notifier);
+
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ sessionId: undefined }));
+    expect(notifier.texts.join(' ')).toContain('esta trabajando');
+  });
+
+  it('no consulta al IDE si el enrutado esta en modo chat', async () => {
+    const resolveIdeSession = jest.fn(async () => ({ id: 'x', title: 'x', busy: false }));
+    const { bridge, config } = await setup({ resolveIdeSession });
+    config.devin.route = 'chat';
+    const notifier = makeNotifier();
+
+    await bridge.handlePrompt('42', 'hola', notifier);
+
+    expect(resolveIdeSession).not.toHaveBeenCalled();
   });
 
   it('responde con el error sin romper el proceso', async () => {

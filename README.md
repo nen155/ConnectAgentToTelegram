@@ -142,6 +142,24 @@ Las órdenes que lanza el propio bot se excluyen: ya reciben su resumen normal, 
 La primera lectura solo toma línea base, así que al arrancar no te avisa de lo que ya estaba
 terminado. Si la base no se puede leer, el panel y los avisos simplemente no muestran sesiones.
 
+### Enrutado: continuar la sesión del IDE
+
+Con `DEVIN_ROUTE=auto` (por defecto), antes de ejecutar una orden el puente busca en la base si el
+proyecto (`DEVIN_WORKDIR`) tiene una sesión reciente del IDE. Si la encuentra **y no está trabajando**,
+la orden se ejecuta continuando esa conversación, y el resumen lo indica:
+
+```
+✅ Listo en 2m 14s
+🔗 Continuando la sesion del IDE: Pasar contenido a la web
+```
+
+Si esa sesión está ocupada, el puente no la invade: abre una nueva y lo advierte en el resumen.
+
+> **Límite real:** Devin Desktop no expone ninguna vía para inyectar una orden en una ventana abierta
+> (`devin <ruta>` solo abre la app). Lo que se consigue es compartir el **historial y el id** de la
+> sesión: el turno se ejecuta en el proceso CLI y queda en esa conversación, pero no se ve escribirse
+> en la ventana. Si prefieres no mezclar contextos, pon `DEVIN_ROUTE=chat`.
+
 ## Bandeja del sistema (Windows)
 
 ```powershell
@@ -184,6 +202,7 @@ Todo se ajusta en `.env` (ver `.env.example`). Lo importante:
 | `DEVIN_WORKDIR` | raíz del proyecto | Carpeta donde trabaja el agente |
 | `DEVIN_PERMISSION_MODE` | `dangerous` | `normal`, `accept-edits`, `smart`, `dangerous` |
 | `DEVIN_CONTINUITY` | `auto` | `auto` (reanuda), `new` (sin memoria), `continue` |
+| `DEVIN_ROUTE` | `auto` | `auto`: reanuda la sesión del IDE del proyecto; `chat`: sesión propia por chat |
 | `DEVIN_TIMEOUT_MS` | 20 min | Corte de seguridad por orden |
 | `DEVIN_MODEL` | el del CLI | Alias o nombre de modelo |
 | `DEVIN_SESSIONS_DB` | `%APPDATA%\devin\cli\sessions.db` | Base de sesiones para resumir tareas externas |
@@ -240,7 +259,7 @@ tests/                  pruebas unitarias (jest + ts-jest)
 ```bash
 npm run dev         # recarga al guardar
 npm run typecheck   # tsc --noEmit
-npm test            # 101 pruebas
+npm test            # 102 pruebas
 npm run demo        # pipeline completo con mocks
 npm run smoke       # pipeline de audio real (requiere whisper + ffmpeg)
 ```

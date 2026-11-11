@@ -202,6 +202,27 @@ function hashSession(session: SessionSnapshot): string {
     .digest('hex');
 }
 
+/**
+ * Busca la sesion de un proyecto concreto, para enrutar la orden al historial del IDE.
+ * Se comparan rutas normalizadas (Windows no distingue mayusculas) y se descartan las
+ * sesiones que gestiona el propio puente.
+ */
+export function findProjectSession(
+  sessions: SessionSnapshot[],
+  cwd: string,
+  ignoreIds?: Set<string>
+): SessionSnapshot | null {
+  const normalize = (value: string): string => value.replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
+  const target = normalize(cwd);
+  if (!target) return null;
+
+  return (
+    sessions.find(
+      (session) => normalize(session.cwd) === target && !(ignoreIds?.has(session.id) ?? false)
+    ) ?? null
+  );
+}
+
 /** Mensaje que recibe el usuario cuando una sesion de Devin termina su turno. */
 export function formatFinishedSession(session: SessionSnapshot, now = Date.now()): string {
   const project = session.cwd ? session.cwd.split(/[\\/]/).filter(Boolean).pop() ?? session.cwd : 'sin carpeta';
