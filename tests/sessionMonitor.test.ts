@@ -73,6 +73,21 @@ describe('readSessions', () => {
     expect(sessions[0]?.lastText).toContain('SMK');
   });
 
+  it('conserva el final del ultimo mensaje cuando es largo', () => {
+    const file = buildDb();
+    const db = new DatabaseSync(file);
+    const longText = `${'contexto inicial. '.repeat(200)}\n\nConclusion: los tests pasan y el README esta actualizado.`;
+    db.prepare('UPDATE message_nodes SET chat_message = ? WHERE session_id = ?').run(
+      JSON.stringify({ role: 'assistant', content: longText }),
+      'visual-hacksaw'
+    );
+    db.close();
+
+    const sessions = readSessions(file, { limit: 5, withinMs: 60 * 60 * 1000 });
+    expect(sessions[0]?.lastText).toContain('Conclusion: los tests pasan');
+    expect(sessions[0]?.lastText).toContain('\n…\n');
+  });
+
   it('marca como working lo que tiene actividad reciente', () => {
     const file = buildDb();
     const sessions = readSessions(file, { limit: 5, workingWindowMs: 60_000 });
@@ -211,6 +226,13 @@ describe('formatFinishedSession', () => {
     expect(text).toContain('Silver');
     expect(text).toContain('Pasar contenido a la web');
     expect(text).toContain('Converti los SMK');
+  });
+
+  it('avisa cuando el resumen conserva solo el inicio y el final', () => {
+    const text = formatFinishedSession(snapshot({ lastText: 'Empece con el login\n…\nTermine migrando la tabla.' }));
+
+    expect(text).toContain('(inicio y final del mensaje)');
+    expect(text).toContain('Termine migrando la tabla.');
   });
 });
 

@@ -1,4 +1,5 @@
 const MAX_SUMMARY_CHARS = 900;
+const HEAD_RATIO = 0.3;
 
 /** Saca el texto de un `chat_message` (content puede ser string o lista de partes). */
 export function extractMessageText(chatMessage: string): { role: string; text: string } | null {
@@ -28,8 +29,25 @@ export function extractMessageText(chatMessage: string): { role: string; text: s
   return null;
 }
 
-export function truncateSummary(text: string, maxChars = MAX_SUMMARY_CHARS): string {
+/**
+ * Resume un mensaje largo conservando el principio (contexto) y, sobre todo, el final:
+ * la conclusion de lo que hizo el modelo suele estar en las ultimas lineas. El hueco
+ * se marca con `…` para que se note que hay contenido omitido.
+ */
+export function summarizeMessage(text: string, maxChars = MAX_SUMMARY_CHARS): string {
   const clean = text.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
   if (clean.length <= maxChars) return clean;
-  return `${clean.slice(0, maxChars - 3).trim()}...`;
+
+  const headChars = Math.floor(maxChars * HEAD_RATIO);
+  const tailChars = maxChars - headChars - 3; // hueco: "\n…\n"
+
+  const headSlice = clean.slice(0, headChars);
+  const headBreak = headSlice.lastIndexOf('\n');
+  const head = (headBreak > headChars * 0.5 ? headSlice.slice(0, headBreak) : headSlice).trimEnd();
+
+  const tailSlice = clean.slice(-tailChars);
+  const tailBreak = tailSlice.indexOf('\n');
+  const tail = (tailBreak >= 0 && tailBreak < tailChars * 0.3 ? tailSlice.slice(tailBreak + 1) : tailSlice).trimStart();
+
+  return `${head}\n…\n${tail}`;
 }

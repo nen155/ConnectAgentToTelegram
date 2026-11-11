@@ -299,6 +299,15 @@ describe('buildSummary', () => {
   it('indica cuantas ordenes quedan en cola', () => {
     expect(buildSummary('hecho', 1_000, 2)).toContain('Quedan 2 orden(es) en cola');
   });
+
+  it('resume la salida larga conservando el final', () => {
+    const text = `${'paso intermedio. '.repeat(200)}\n\nConclusion: migracion terminada y tests en verde.`;
+    const summary = buildSummary(text, 1_000);
+
+    expect(summary).toContain('Conclusion: migracion terminada');
+    expect(summary).toContain('\n…\n');
+    expect(summary).not.toContain('paso intermedio. '.repeat(200));
+  });
 });
 
 describe('formatDuration', () => {

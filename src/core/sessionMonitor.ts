@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import type { Logger } from '../logger';
-import { extractMessageText, truncateSummary } from './sessionDigest';
+import { extractMessageText, summarizeMessage } from './sessionDigest';
 
 export interface SessionSnapshot {
   id: string;
@@ -79,7 +79,7 @@ export function readSessions(dbPath: string, options: ReadSessionsOptions = {}):
         agentMode: row.agent_mode ?? '',
         lastActivityAt,
         lastRole: role,
-        lastText: truncateSummary(text, 600),
+        lastText: summarizeMessage(text),
         lastRowId: rowId,
         state: Date.now() - lastActivityAt < workingWindowMs ? 'working' : 'idle'
       });
@@ -228,6 +228,10 @@ export function formatFinishedSession(session: SessionSnapshot, now = Date.now()
   const project = session.cwd ? session.cwd.split(/[\\/]/).filter(Boolean).pop() ?? session.cwd : 'sin carpeta';
   const idleFor = Math.max(0, Math.round((now - session.lastActivityAt) / 1000));
   const title = session.title.trim() || session.id;
+  const summary = session.lastText.trim() || '(sin texto)';
+  const label = summary.includes('\n…\n')
+    ? 'Resumen de lo que hizo (inicio y final del mensaje):'
+    : 'Resumen de lo que hizo:';
 
   return [
     '✅ Sesion de Devin terminada',
@@ -235,7 +239,7 @@ export function formatFinishedSession(session: SessionSnapshot, now = Date.now()
     `Sesion: ${title.length > 80 ? `${title.slice(0, 77)}...` : title}`,
     `Sin actividad desde hace ${idleFor}s`,
     '',
-    'Resumen de lo ultimo que hizo:',
-    session.lastText.trim() || '(sin texto)'
+    label,
+    summary
   ].join('\n');
 }

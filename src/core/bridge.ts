@@ -12,6 +12,7 @@ import type { KeyedQueue } from './taskQueue';
 import type { BridgeState, StatusPublisher } from './statusPublisher';
 import { TaskRegistry, type TaskRecord } from './taskRegistry';
 import type { SessionSnapshot } from './sessionMonitor';
+import { summarizeMessage } from './sessionDigest';
 import { formatDuration } from '../util/format';
 
 export { formatDuration };
@@ -48,7 +49,9 @@ export interface BridgeDeps {
 
 /** Formatea duraciones cortas para el resumen. */
 export function buildSummary(text: string, durationMs: number, pending = 0, note?: string): string {
-  const body = text.trim() || 'Termine la tarea, pero no produje texto de resumen.';
+  // Se envia un resumen, no la salida completa: principio para el contexto y final
+  // porque ahi esta la conclusion de lo que hizo el modelo.
+  const body = summarizeMessage(text) || 'Termine la tarea, pero no produje texto de resumen.';
   const tail =
     pending > 0 ? `\n\n⏳ Quedan ${pending} orden(es) en cola.` : '\n\n🟢 Esperando nuevas ordenes.';
   const header = `✅ Listo en ${formatDuration(durationMs)}${note ? `\n${note}` : ''}`;
