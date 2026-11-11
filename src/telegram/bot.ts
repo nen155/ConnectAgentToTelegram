@@ -9,6 +9,8 @@ import type { SessionStore } from '../devin/sessionStore';
 import type { KeyedQueue } from '../core/taskQueue';
 import { runCommand, stripAnsi } from '../util/process';
 import { formatReadiness, inspectReadiness } from '../readiness';
+import { markdownToTelegramHtml } from './format';
+import type { ReplyRouteStore } from './replyRoutes';
 
 const TELEGRAM_TEXT_LIMIT = 4000;
 
@@ -45,6 +47,8 @@ export interface BotDeps {
   store: SessionStore;
   queue: KeyedQueue;
   logger: Logger;
+  /** Proyecto asociado a cada mensaje enviado, para enrutar respuestas. */
+  replyRoutes: ReplyRouteStore;
 }
 
 const HELP_TEXT = [
@@ -57,10 +61,24 @@ const HELP_TEXT = [
   '/help - esta ayuda'
 ].join('\n');
 
-async function sendLongText(ctx: Context, text: string): Promise<void> {
+async function sendLongText(ctx: Context, text: string): Promise<{ messageId?: number }> {
+  let lastMessageId: number | undefined;
   for (const chunk of splitMessage(text)) {
-    await ctx.reply(chunk, { link_preview_options: { is_disabled: true } });
+    // Los resumenes de Devin vienen en Markdown; se convierten a HTML porque
+    // Telegram no lo interpreta. Si el HTML quedara mal formado, se reintenta
+    // en texto plano para no perder el mensaje.
+    try {
+      const sent = await ctx.reply(markdownToTelegramHtml(chunk), {
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true }
+      });
+      lastMessageId = sent.message_id;
+    } catch {
+      const sent = await ctx.reply(chunk, { link_preview_options: { is_disabled: true } });
+      lastMessageId = sent.message_id;
+    }
   }
+  return { messageId: lastMessageId };
 }
 
 function createNotifier(ctx: Context): Notifier {
@@ -91,7 +109,7 @@ async function downloadVoiceFile(
 }
 
 export function createTelegramBot(deps: BotDeps): Bot {
-  const { config, bridge, store, queue, logger } = deps;
+  const { config, bridge, store, queue, logger, replyRoutes } = deps;
   const bot = new Bot(config.telegram.token);
   const allowed = new Set(config.telegram.allowedUserIds);
 
@@ -171,8 +189,9 @@ export function createTelegramBot(deps: BotDeps): Bot {
     const notifier = createNotifier(ctx);
     try {
       const audioPath = await downloadVoiceFile(ctx, fileId, config.paths.tmp, config.telegram.token);
+      const repliedProject = replyRoutes.resolve(ctx.message.reply_to_message?.message_id)?.project;
       void bridge
-        .handleVoice(chatId, audioPath, notifier)
+        .handleVoice(chatId, audioPath, notifier, repliedProject ? { project: repliedProject } : {})
         .catch((error) => logger.error('Fallo el flujo de voz', error))
         .finally(() => fs.rm(audioPath, { force: true }).catch(() => undefined));
     } catch (error) {
@@ -188,7 +207,7 @@ export function createTelegramBot(deps: BotDeps): Bot {
 
     const notifier = createNotifier(ctx);
     void bridge
-      .handlePrompt(chatId, text, notifier)
+      .handlePrompt(chatId, text, notifier, replyRoutes.resolve(ctx.message.reply_to_message?.message_id)?.project ? { project: replyRoutes.resolve(ctx.message.reply_to_message?.message_id)?.project } : {})
       .catch((error) => logger.error('Fallo el flujo de texto', error));
   });
 

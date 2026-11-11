@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AppConfig } from '../src/config';
 import { createLogger } from '../src/logger';
-import { CommandBridge, buildSummary, formatDuration, type Notifier } from '../src/core/bridge';
+import { CommandBridge, buildSummary, formatDuration, withLanguageInstruction, type Notifier } from '../src/core/bridge';
 import { KeyedQueue } from '../src/core/taskQueue';
 import { SessionStore } from '../src/devin/sessionStore';
 
@@ -33,6 +33,7 @@ function makeConfig(tmpDir: string): AppConfig {
       statusFile: path.join(tmpDir, 'status.json')
     },
     logLevel: 'error',
+    summaryLanguage: '',
     mockMode: false
   };
 }
@@ -58,7 +59,11 @@ async function setup(
     synthesize?: jest.Mock;
     transcribe?: jest.Mock;
     resolveIdeSession?: () => Promise<{ id: string; title: string; busy: boolean } | null>;
-    desktop?: { send: (prompt: string) => Promise<{ sent: boolean; reason?: string }> };
+    desktop?: {
+      send: (prompt: string, project?: string) => Promise<{ sent: boolean; reason?: string; project?: string }>;
+      listWindows: () => Promise<Array<{ project: string; title: string }>>;
+    };
+    knownProjects?: () => Promise<string[]>;
   } = {}
 ) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bridge-'));
@@ -83,7 +88,8 @@ async function setup(
     logger: createLogger({ level: 'error' }),
     status: { publish },
     ...(overrides.resolveIdeSession ? { resolveIdeSession: overrides.resolveIdeSession } : {}),
-    ...(overrides.desktop ? { desktop: overrides.desktop } : {})
+    ...(overrides.desktop ? { desktop: overrides.desktop } : {}),
+    ...(overrides.knownProjects ? { knownProjects: overrides.knownProjects } : {})
   });
 
   return { bridge, config, store, run, synthesize, transcribe, publish, tmpDir };
@@ -149,20 +155,63 @@ describe('CommandBridge', () => {
   });
 
   it('envia la orden a la ventana del IDE sin lanzar el CLI en modo desktop', async () => {
-    const desktop = { send: jest.fn(async () => ({ sent: true })) };
+    const desktop = {
+      send: jest.fn(async () => ({ sent: true })),
+      listWindows: jest.fn(async () => [{ project: 'mi-proyecto', title: 'mi-proyecto - Devin' }])
+    };
     const { bridge, run, config } = await setup({ desktop });
     config.devin.route = 'desktop';
     const notifier = makeNotifier();
 
     await bridge.handlePrompt('42', 'arregla el login', notifier);
 
-    expect(desktop.send).toHaveBeenCalledWith('arregla el login');
+    expect(desktop.send).toHaveBeenCalledWith('arregla el login', 'mi-proyecto');
     expect(run).not.toHaveBeenCalled();
     expect(notifier.texts.join(' ')).toContain('enviada a la ventana');
   });
 
+  it('enruta al proyecto que se nombra en la orden', async () => {
+    const desktop = {
+      send: jest.fn(async () => ({ sent: true })),
+      listWindows: jest.fn(async () => [
+        { project: 'mi-proyecto', title: 'mi-proyecto - Devin' },
+        { project: 'Silver Utilizar Silver CD 2 ISO', title: 'Silver Utilizar Silver CD 2 ISO - Devin' }
+      ])
+    };
+    const { bridge, config } = await setup({ desktop });
+    config.devin.route = 'desktop';
+    const notifier = makeNotifier();
+
+    await bridge.handlePrompt('42', 'en Silver, continua con lo pendiente', notifier);
+
+    expect(desktop.send).toHaveBeenCalledWith('en Silver, continua con lo pendiente', 'Silver Utilizar Silver CD 2 ISO');
+    expect(notifier.texts.join(' ')).toContain('Silver Utilizar Silver CD 2 ISO');
+  });
+
+  it('avisa si el proyecto nombrado no tiene ventana abierta', async () => {
+    const desktop = {
+      send: jest.fn(async () => ({ sent: true })),
+      listWindows: jest.fn(async () => [{ project: 'mi-proyecto', title: 'mi-proyecto - Devin' }])
+    };
+    const { bridge, run, config } = await setup({
+      desktop,
+      knownProjects: async () => ['Silver Utilizar Silver CD 2 ISO', 'mi-proyecto']
+    });
+    config.devin.route = 'desktop';
+    const notifier = makeNotifier();
+
+    await bridge.handlePrompt('42', 'en Silver continua', notifier);
+
+    expect(desktop.send).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalled();
+    expect(notifier.texts.join(' ')).toContain('no esta abierta');
+  });
+
   it('cae al CLI si no puede escribir en la ventana del IDE', async () => {
-    const desktop = { send: jest.fn(async () => ({ sent: false, reason: 'SIN_VENTANA' })) };
+    const desktop = {
+      send: jest.fn(async () => ({ sent: false, reason: 'COMPOSITOR_OCUPADO' })),
+      listWindows: jest.fn(async () => [{ project: 'mi-proyecto', title: 'mi-proyecto - Devin' }])
+    };
     const { bridge, run, config } = await setup({ desktop });
     config.devin.route = 'desktop';
     const notifier = makeNotifier();
@@ -170,7 +219,25 @@ describe('CommandBridge', () => {
     await bridge.handlePrompt('42', 'arregla el login', notifier);
 
     expect(run).toHaveBeenCalled();
-    expect(notifier.texts.join(' ')).toContain('No pude escribir en la ventana del IDE');
+    expect(notifier.texts.join(' ')).toContain('No pude escribir en la ventana');
+  });
+
+  it('no encola en la ventana si la sesion del IDE esta trabajando', async () => {
+    const desktop = {
+      send: jest.fn(async () => ({
+        sent: false,
+        reason: 'SESION_OCUPADA: la sesion del IDE esta trabajando; no se escribe nada'
+      })),
+      listWindows: jest.fn(async () => [{ project: 'mi-proyecto', title: 'mi-proyecto - Devin' }])
+    };
+    const { bridge, run, config } = await setup({ desktop });
+    config.devin.route = 'desktop';
+    const notifier = makeNotifier();
+
+    await bridge.handlePrompt('42', 'arregla el login', notifier);
+
+    expect(run).toHaveBeenCalled();
+    expect(notifier.texts.join(' ')).toContain('esta trabajando y no la pongo en cola');
   });
 
   it('responde con el error sin romper el proceso', async () => {
@@ -313,5 +380,50 @@ describe('buildSummary', () => {
 describe('formatDuration', () => {
   it('formatea minutos exactos sin segundos', () => {
     expect(formatDuration(120_000)).toBe('2m');
+  });
+});
+
+describe('withLanguageInstruction', () => {
+  it('anade la instruccion de idioma al final de la orden', () => {
+    const result = withLanguageInstruction('arregla el login', 'es');
+    expect(result).toContain('arregla el login');
+    expect(result).toContain('español');
+  });
+
+  it('no toca la orden si no se fuerza idioma', () => {
+    expect(withLanguageInstruction('arregla el login', '')).toBe('arregla el login');
+  });
+});
+
+describe('prioridad de enrutado', () => {
+  it('la respuesta a un mensaje manda sobre el proyecto mencionado en el texto', async () => {
+    const desktop = {
+      send: jest.fn(async () => ({ sent: true })),
+      listWindows: jest.fn(async () => [
+        { project: 'Silver Utilizar Silver CD 2 ISO', title: 'a' },
+        { project: 'MilioLab', title: 'b' }
+      ])
+    };
+    const { bridge, config } = await setup({ desktop });
+    config.devin.route = 'desktop';
+    const notifier = makeNotifier();
+
+    await bridge.handlePrompt('42', 'en Silver continua', notifier, { project: 'MilioLab' });
+
+    expect(desktop.send).toHaveBeenCalledWith(expect.any(String), 'MilioLab');
+  });
+
+  it('sin respuesta, sigue infiriendo el proyecto del texto', async () => {
+    const desktop = {
+      send: jest.fn(async () => ({ sent: true })),
+      listWindows: jest.fn(async () => [{ project: 'Silver Utilizar Silver CD 2 ISO', title: 'a' }])
+    };
+    const { bridge, config } = await setup({ desktop });
+    config.devin.route = 'desktop';
+    const notifier = makeNotifier();
+
+    await bridge.handlePrompt('42', 'en Silver continua', notifier);
+
+    expect(desktop.send).toHaveBeenCalledWith(expect.any(String), 'Silver Utilizar Silver CD 2 ISO');
   });
 });

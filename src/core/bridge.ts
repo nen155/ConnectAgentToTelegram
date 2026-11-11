@@ -8,6 +8,7 @@ import type { TextToSpeech } from '../audio/tts';
 import type { DevinRunner } from '../devin/devinRunner';
 import type { SessionStore } from '../devin/sessionStore';
 import type { DesktopRouter } from '../devin/desktopRouter';
+import { matchProject } from '../devin/projectMatch';
 import type { KeyedQueue } from './taskQueue';
 import type { BridgeState, StatusPublisher } from './statusPublisher';
 import { TaskRegistry, type TaskRecord } from './taskRegistry';
@@ -18,8 +19,14 @@ import { formatDuration } from '../util/format';
 export { formatDuration };
 
 export interface Notifier {
-  text(message: string): Promise<void>;
+  /** Devuelve el id del mensaje enviado, para poder enrutar respuestas a el. */
+  text(message: string): Promise<{ messageId?: number } | void>;
   voice(filePath: string): Promise<void>;
+}
+
+export interface OrderOptions {
+  /** Proyecto forzado (p. ej. porque la orden responde a un mensaje de ese proyecto). */
+  project?: string;
 }
 
 /** Sesion del IDE que corresponde al proyecto donde trabaja el puente. */
@@ -44,10 +51,21 @@ export interface BridgeDeps {
   /** Resuelve la sesion del IDE para el proyecto configurado, si existe. */
   resolveIdeSession?: () => Promise<IdeSessionRoute | null>;
   /** Escribe la orden en la ventana del IDE (DEVIN_ROUTE=desktop). */
-  desktop?: Pick<DesktopRouter, 'send'>;
+  desktop?: Pick<DesktopRouter, 'send' | 'listWindows'>;
+  /** Proyectos conocidos (carpetas de sesiones recientes), para detectar menciones sin ventana. */
+  knownProjects?: () => Promise<string[]>;
+  /** Guarda el proyecto asociado a un mensaje enviado, para enrutar respuestas. */
+  rememberRoute?: (messageId: number, project: string) => void;
 }
 
 /** Formatea duraciones cortas para el resumen. */
+/** Añade al final de la orden la instruccion de idioma para el resumen del agente. */
+export function withLanguageInstruction(prompt: string, language: '' | 'es' | 'en'): string {
+  if (!language) return prompt;
+  const name = language === 'es' ? 'español' : 'inglés';
+  return `${prompt}\n\nResponde el resumen final en ${name}.`;
+}
+
 export function buildSummary(text: string, durationMs: number, pending = 0, note?: string): string {
   // Se envia un resumen, no la salida completa: principio para el contexto y final
   // porque ahi esta la conclusion de lo que hizo el modelo.
@@ -67,7 +85,7 @@ export class CommandBridge {
 
   constructor(private readonly deps: BridgeDeps) {}
 
-  async handleVoice(chatId: string, audioFile: string, notifier: Notifier): Promise<void> {
+  async handleVoice(chatId: string, audioFile: string, notifier: Notifier, options: OrderOptions = {}): Promise<void> {
     const { transcriber, logger } = this.deps;
     const receivedAt = Date.now();
 
@@ -94,11 +112,16 @@ export class CommandBridge {
 
     const transcribeMs = Date.now() - receivedAt;
     await notifier.text(`🎧 Entendi en ${formatDuration(transcribeMs)}: "${transcript}"\n🤖 Trabajando...`);
-    await this.runOrder(chatId, transcript, notifier, transcribeMs);
+    await this.runOrder(chatId, transcript, notifier, transcribeMs, options);
   }
 
-  async handlePrompt(chatId: string, prompt: string, notifier: Notifier): Promise<void> {
-    await this.runOrder(chatId, prompt, notifier);
+  async handlePrompt(
+    chatId: string,
+    prompt: string,
+    notifier: Notifier,
+    options: OrderOptions = {}
+  ): Promise<void> {
+    await this.runOrder(chatId, prompt, notifier, undefined, options);
   }
 
   /** Republica el estado (lo usa el vigilante de agentes externos al detectar cambios). */
@@ -110,35 +133,74 @@ export class CommandBridge {
     chatId: string,
     prompt: string,
     notifier: Notifier,
-    transcribeMs?: number
+    transcribeMs?: number,
+    options: OrderOptions = {}
   ): Promise<void> {
     const { queue, config, logger } = this.deps;
     let note: string | undefined;
+    const agentPrompt = withLanguageInstruction(prompt, config.summaryLanguage);
 
     // Enrutado al IDE: se escribe la orden en el compositor de su ventana.
     if (config.devin.route === 'desktop' && this.deps.desktop) {
-      const attempt = await this.deps.desktop.send(prompt);
-      if (attempt.sent) {
-        const task = this.registry.create({ chatId, prompt });
-        const now = Date.now();
-        this.registry.update(task.id, { state: 'done', startedAt: now, finishedAt: now, durationMs: 0 });
-        await this.publishStatus();
+      const windows = await this.deps.desktop.listWindows().catch(() => []);
+      const mentioned = matchProject(prompt, windows);
 
-        await notifier.text(
-          `📨 Orden enviada a la ventana de Devin Desktop "${config.devin.projectName}".\n` +
-            'Te aviso con el resumen cuando termine: lo detecta el monitor de sesiones.'
-        );
-        logger.info('Orden enviada al IDE', { chatId, project: config.devin.projectName });
-        return;
+      // Si nombra un proyecto que existe pero cuya ventana no esta abierta, no se cae en
+      // la ventana por defecto: se avisa en vez de trabajar en el proyecto equivocado.
+      const known = mentioned ? [] : await this.deps.knownProjects?.().catch(() => []) ?? [];
+      const mentionedClosed = matchProject(
+        prompt,
+        known.map((project) => ({ project, title: project }))
+      );
+
+      const target =
+        options.project ??
+        mentioned?.window.project ??
+        (mentionedClosed
+          ? undefined
+          : windows.some((window) => window.project === config.devin.projectName)
+            ? config.devin.projectName
+            : undefined);
+
+      if (target) {
+        const attempt = await this.deps.desktop.send(agentPrompt, target);
+        if (attempt.sent) {
+          const task = this.registry.create({ chatId, prompt });
+          const now = Date.now();
+          this.registry.update(task.id, { state: 'done', startedAt: now, finishedAt: now, durationMs: 0 });
+          await this.publishStatus();
+
+          const how = options.project
+            ? 'porque respondes a un mensaje de ese proyecto'
+            : mentioned
+              ? 'por el proyecto que has nombrado'
+              : 'por la carpeta de trabajo';
+          const sent = await notifier.text(
+            `📨 Orden enviada a la ventana de Devin Desktop "${target}" (${how}).\n` +
+              'Te aviso con el resumen cuando termine: lo detecta el monitor de sesiones.'
+          );
+          if (sent?.messageId) this.deps.rememberRoute?.(sent.messageId, target);
+          logger.info('Orden enviada al IDE', { chatId, project: target, mentioned: Boolean(mentioned) });
+          return;
+        }
+
+        note = attempt.reason?.startsWith('SESION_OCUPADA')
+          ? `⚠️ La ventana de "${target}" esta trabajando y no la pongo en cola; ejecuto la orden en el CLI.`
+          : `⚠️ No pude escribir en la ventana de "${target}" (${attempt.reason ?? 'sin acceso'}); la ejecuto en el CLI.`;
+        logger.warn('No se pudo enviar al IDE', { project: target, reason: attempt.reason });
+      } else if (mentionedClosed) {
+        note = `⚠️ La ventana de "${mentionedClosed.window.project}" no esta abierta; la ejecuto en el CLI.`;
+      } else {
+        note = `⚠️ No hay ninguna ventana de Devin Desktop abierta para "${config.devin.projectName}"; la ejecuto en el CLI.`;
       }
-
-      note = `⚠️ No pude escribir en la ventana del IDE (${attempt.reason ?? 'sin acceso'}); la ejecuto en el CLI.`;
-      logger.warn('No se pudo enviar al IDE', { reason: attempt.reason });
     }
 
-    const queued = queue.pendingFor(chatId);
-    if (queued > 0) {
-      await notifier.text(`⏳ Hay ${queued} orden(es) en curso. La tuya va despues.`);
+    // Solo el camino CLI hace cola; los envios a la ventana del IDE son inmediatos.
+    const running = this.registry.active();
+    const current = running[0];
+    if (current) {
+      const label = current.prompt.length > 70 ? `${current.prompt.slice(0, 67)}...` : current.prompt;
+      await notifier.text(`⏳ Sigue en curso: "${label}". Tu orden va despues.`);
     }
 
     const task = this.registry.create({ chatId, prompt });
@@ -170,7 +232,7 @@ export class CommandBridge {
           !sessionId && (continuity === 'continue' || (continuity === 'auto' && (session?.runs ?? 0) > 0));
 
         const result = await this.deps.runner.run({
-          prompt,
+          prompt: agentPrompt,
           sessionId,
           allowContinue,
           cwd: config.devin.workdir,

@@ -49,6 +49,8 @@ const schema = z.object({
 
   DATA_DIR: z.string().trim().optional(),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  /** Idioma en el que se pide al agente el resumen (vacio = no forzar). */
+  SUMMARY_LANGUAGE: z.enum(['', 'es', 'en']).default('es'),
 
   /** Sustituye transcripcion y Devin por mocks: util para probar el puente sin cuentas. */
   MOCK_MODE: booleanish(false)
@@ -75,8 +77,10 @@ export interface AppConfig {
   whisper: { bin: string; model: string; language: string; threads: number; timeoutMs: number };
   tts: { enabled: boolean; voice?: string; rate: number; maxChars: number };
   ffmpegBin: string;
-  paths: { data: string; tmp: string; sessionsFile: string; logFile: string; ttsScript: string; statusFile: string };
+  paths: { data: string; tmp: string; sessionsFile: string; logFile: string; ttsScript: string; statusFile: string; replyRoutesFile: string };
   logLevel: 'debug' | 'info' | 'warn' | 'error';
+  /** Idioma forzado para el resumen del agente ('es', 'en' o '' para no forzar). */
+  summaryLanguage: '' | 'es' | 'en';
   mockMode: boolean;
 }
 
@@ -146,9 +150,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       sessionsFile: path.join(dataDir, 'sessions.json'),
       logFile: path.join(dataDir, 'logs', 'bridge.log'),
       ttsScript: path.join(PROJECT_ROOT, 'scripts', 'sapi-tts.ps1'),
-      statusFile: path.join(dataDir, 'status.json')
+      statusFile: path.join(dataDir, 'status.json'),
+      replyRoutesFile: path.join(dataDir, 'reply-routes.json')
     },
     logLevel: values.LOG_LEVEL,
+    summaryLanguage: values.SUMMARY_LANGUAGE,
     mockMode: values.MOCK_MODE
   };
 }

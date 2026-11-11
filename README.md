@@ -117,6 +117,8 @@ Las órdenes de un mismo chat se ejecutan **en cola y en orden**. Chats distinto
 entre sí.
 
 Al terminar, el resumen cierra con `🟢 Esperando nuevas ordenes.` o `⏳ Quedan N orden(es) en cola.`
+No se envía la salida completa del agente: el texto se resume conservando el principio (contexto) y el
+final (la conclusión de lo que hizo), con `…` marcando el tramo omitido.
 
 ### Sesiones de Devin: estado y avisos
 
@@ -134,9 +136,13 @@ Proyecto: ConnectAgentToTelegram
 Sesion: ConnectAgentToTelegram: conectar agente a Telegram
 Sin actividad desde hace 24s
 
-Resumen de lo ultimo que hizo:
+Resumen de lo que hizo:
 He publicado el repositorio y creado el aviso de sesiones...
 ```
+
+El aviso no copia el mensaje entero: conserva el principio y el final, y marca con `…` lo que queda
+en medio. La conclusión suele estar al final, así que se ve en qué terminó el turno aunque el mensaje
+sea largo. Cuando hay tramo omitido, la cabecera lo indica: `(inicio y final del mensaje)`.
 
 Las órdenes que lanza el propio bot se excluyen: ya reciben su resumen normal, sin duplicados.
 La primera lectura solo toma línea base, así que al arrancar no te avisa de lo que ya estaba
@@ -170,10 +176,20 @@ Cómo se hace, y por qué así:
 
 1. Se busca la ventana **por proyecto**, no por posición ni por foco: `Silver Utilizar Silver CD 2 ISO - Devin`.
 2. Se localiza el control `Edit` llamado `Prompt` en el árbol de accesibilidad de esa ventana.
-3. Se escribe con `ValuePattern` (API de accesibilidad), **no con teclas a ciegas**.
-4. Se verifica que el texto está realmente en el compositor y que el foco sigue ahí; solo entonces se
-   pulsa Enter. Si algo no cuadra, no se envía nada.
-5. Si la ventana o el control no aparecen, la orden cae al CLI y el resumen lo advierte.
+3. **Si el compositor tiene texto sin enviar, no se toca**: se aborta y la orden cae al CLI. Así no
+   se pisa un borrador que estés escribiendo.
+4. **Si la sesión del IDE está trabajando, tampoco se escribe**: en ese estado el botón del compositor
+   es `Detener Devin` y Enter no envía, **encola** el mensaje dentro del IDE (y el compositor se vacía,
+   que parece que borra la orden). Se detecta antes de pegar y la orden cae al CLI.
+5. Se activa la ventana de verdad (Windows no deja pasar a primer plano a un proceso en segundo plano:
+   hace falta un ALT previo) y se enfoca el compositor. Se **pega con Ctrl+V** (evento real), no
+   escribiendo por `ValuePattern`: el compositor es un editor Slate y `SetValue` lo deja
+   desincronizado, con lo que luego no se puede teclear.
+6. Se verifica que el texto está en el compositor y que el foco sigue ahí; solo entonces se **pulsa el
+   botón `Enviar`** (por `InvokePattern`), no Enter a ciegas. Se da por enviado cuando el compositor se
+   vacía. Tras enviar, se devuelve el foco al compositor, listo para escribir.
+7. Si la ventana o el control no aparecen, la orden cae al CLI y el resumen lo advierte. En ningún caso
+   se borra el texto del compositor: si algo falla, la orden se queda escrita.
 
 El trabajo ocurre en la ventana, así que el resumen no es inmediato: lo entrega el monitor de sesiones
 cuando ese turno termina.
@@ -181,11 +197,27 @@ cuando ese turno termina.
 Requisitos y efectos:
 
 - La ventana tiene que estar **abierta** y su título empezar por el nombre de la carpeta de
-  `DEVIN_WORKDIR`.
+  `DEVIN_WORKDIR`… salvo que **nombres el proyecto en la orden** (ver abajo).
 - El puente **roba el foco** un instante para escribir. Si estás tecleando en ese momento, molesta.
 - Si el IDE cambia su árbol de accesibilidad (o el control deja de llamarse `Prompt`), el enrutado
   fallará y caerá al CLI: no rompe nada, pero pierde la función.
 - No se toca el portapapeles.
+
+#### Elegir proyecto desde la nota de voz
+
+Si tienes varias ventanas abiertas, di el proyecto en la orden y el puente elige esa ventana:
+
+| Dices | Va a |
+|---|---|
+| "en Silver, continúa con lo pendiente" | `Silver Utilizar Silver CD 2 ISO - Devin` |
+| "sigue con jellyfin" | `Jellyfin.Plugin.Torrent - Devin` |
+| "revisa el README del proyecto" | la ventana de `DEVIN_WORKDIR` (sin mención explícita) |
+
+El emparejado ignora mayúsculas, acentos y palabras comunes (`de`, `el`, `proyecto`…) y exige una
+palabra distintiva de 4+ caracteres, así que "la web" o "el proyecto" no eligen nada por error.
+
+Si nombras un proyecto **que existe pero cuya ventana está cerrada**, el puente **no** cae en la
+ventana por defecto: te avisa y ejecuta la orden en el CLI, para no trabajar en el proyecto equivocado.
 
 ## Bandeja del sistema (Windows)
 

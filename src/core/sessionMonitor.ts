@@ -57,18 +57,26 @@ export function readSessions(dbPath: string, options: ReadSessionsOptions = {}):
 
     const snapshots: SessionSnapshot[] = [];
     for (const row of rows) {
-      const node = db
-        .prepare('SELECT row_id, chat_message FROM message_nodes WHERE session_id = ? ORDER BY row_id DESC LIMIT 1')
-        .get(row.id) as { row_id: number; chat_message: string } | undefined;
+      // Se busca el ultimo mensaje DEL ASISTENTE con texto: el ultimo nodo puede ser un
+      // mensaje interno (p. ej. la instruccion de resumir la conversacion), que no es la
+      // respuesta del agente y llegaria a Telegram en otro idioma y fuera de contexto.
+      const nodes = db
+        .prepare(
+          'SELECT row_id, chat_message FROM message_nodes WHERE session_id = ? ORDER BY row_id DESC LIMIT 8'
+        )
+        .all(row.id) as Array<{ row_id: number; chat_message: string }>;
 
       let role = '';
       let text = '';
       let rowId = 0;
-      if (node) {
-        rowId = Number(node.row_id);
+      for (const node of nodes) {
         const message = extractMessageText(node.chat_message);
-        role = message?.role ?? '';
-        text = message?.text ?? '';
+        if (!message || message.role !== 'assistant') continue;
+        if (!message.text.trim()) continue;
+        role = message.role;
+        text = message.text;
+        rowId = Number(node.row_id);
+        break;
       }
 
       const lastActivityAt = Number(row.last_activity_at) * 1000;

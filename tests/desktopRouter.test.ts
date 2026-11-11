@@ -52,6 +52,19 @@ describe('DesktopRouter', () => {
     expect(result.reason).toContain('SIN_VENTANA');
   });
 
+  it('informa cuando la sesion del IDE esta trabajando', async () => {
+    const exec = jest.fn(async () => ({
+      stdout: 'SESION_OCUPADA: la sesion del IDE esta trabajando; no se escribe nada\n',
+      stderr: '',
+      code: 10,
+      timedOut: false
+    }));
+
+    const result = await routerWith(exec).send('hola');
+    expect(result.sent).toBe(false);
+    expect(result.reason).toContain('SESION_OCUPADA');
+  });
+
   it('no se cuelga si el script falla al arrancar', async () => {
     const exec = jest.fn(async () => {
       throw new Error('powershell no encontrado');

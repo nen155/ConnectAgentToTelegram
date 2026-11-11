@@ -3,6 +3,7 @@ import type { CommandBridge } from '../src/core/bridge';
 import { KeyedQueue } from '../src/core/taskQueue';
 import { SessionStore } from '../src/devin/sessionStore';
 import { createLogger } from '../src/logger';
+import { ReplyRouteStore } from '../src/telegram/replyRoutes';
 import { createTelegramBot } from '../src/telegram/bot';
 
 type BotInstance = ReturnType<typeof createTelegramBot>;
@@ -15,8 +16,9 @@ function makeConfig(allowed: number[]): AppConfig {
     whisper: { bin: 'w', model: 'm', language: 'es', threads: 1, timeoutMs: 1000 },
     tts: { enabled: false, rate: 0, maxChars: 100 },
     ffmpegBin: 'ffmpeg',
-    paths: { data: '.', tmp: '.', sessionsFile: 's.json', logFile: 'l.log', ttsScript: 's.ps1', statusFile: 'st.json' },
+    paths: { data: '.', tmp: '.', sessionsFile: 's.json', logFile: 'l.log', ttsScript: 's.ps1', statusFile: 'st.json', replyRoutesFile: 'rr.json' },
     logLevel: 'error',
+    summaryLanguage: '',
     mockMode: false
   };
 }
@@ -46,7 +48,8 @@ async function runUpdate(allowed: number[], update: TelegramUpdate) {
     bridge,
     store: new SessionStore('no-se-usa.json'),
     queue: new KeyedQueue(),
-    logger: createLogger({ level: 'error' })
+    logger: createLogger({ level: 'error' }),
+    replyRoutes: new ReplyRouteStore('rr.json')
   });
 
   bot.botInfo = { id: 123, is_bot: true, first_name: 'Puente', username: 'puente_bot' } as typeof bot.botInfo;
@@ -79,7 +82,7 @@ describe('allowlist de Telegram', () => {
   it('deja pasar la orden del usuario autorizado', async () => {
     const { bridge } = await runUpdate([999], textUpdate(999, 'arregla el bug'));
 
-    expect(bridge.handlePrompt).toHaveBeenCalledWith('999', 'arregla el bug', expect.any(Object));
+    expect(bridge.handlePrompt).toHaveBeenCalledWith('999', 'arregla el bug', expect.any(Object), expect.any(Object));
   });
 
   it('ignora los comandos desconocidos sin ejecutarlos', async () => {

@@ -19,7 +19,9 @@ import { DevinRunner } from './devin/devinRunner';
 import { WhisperCppTranscriber } from './audio/whisper';
 import { WindowsSapiTts } from './audio/tts';
 import { MockDevinRunner, MockTranscriber } from './mocks';
-import { createTelegramBot } from './telegram/bot';
+import { createTelegramBot, splitMessage } from './telegram/bot';
+import { ReplyRouteStore } from './telegram/replyRoutes';
+import { markdownToTelegramHtml } from './telegram/format';
 import { formatReadiness, inspectReadiness } from './readiness';
 
 async function main(): Promise<void> {
@@ -97,6 +99,9 @@ async function main(): Promise<void> {
         tmpDir: config.paths.tmp
       });
 
+  const replyRoutes = new ReplyRouteStore(config.paths.replyRoutesFile);
+  await replyRoutes.load();
+
   const queue = new KeyedQueue();
   const status = new StatusPublisher(config.paths.statusFile);
   await status.publish('idle');
@@ -130,11 +135,17 @@ async function main(): Promise<void> {
     logger,
     status,
     sessions: () => monitor.sessions(),
+    rememberRoute: (messageId, project) => replyRoutes.remember(messageId, { project }),
     desktop: new DesktopRouter({
       scriptPath: path.join(PROJECT_ROOT, 'scripts', 'send-to-desktop.ps1'),
       tmpDir: config.paths.tmp,
       projectName: config.devin.projectName
     }),
+    knownProjects: async () => {
+      const sessions = readSessions(config.devin.sessionsDb, { limit: 20, withinMs: 7 * 24 * 60 * 60 * 1000 });
+      const names = sessions.map((session) => path.basename(session.cwd)).filter(Boolean);
+      return [...new Set(names)];
+    },
     resolveIdeSession: async () => {
       const sessions = readSessions(config.devin.sessionsDb, { limit: 20, withinMs: 24 * 60 * 60 * 1000 });
       const ownSessions = new Set(
@@ -151,16 +162,33 @@ async function main(): Promise<void> {
   });
   refreshStatus = () => void bridge.refreshStatus();
 
-  const bot = createTelegramBot({ config, bridge, store, queue, logger });
+  const bot = createTelegramBot({ config, bridge, store, queue, logger, replyRoutes });
 
   notifyFinishedSession = (session) => {
     const text = formatFinishedSession(session);
     logger.info('Aviso de sesion terminada', { sesion: session.id, resumenChars: session.lastText.length });
 
+    // El proyecto se guarda junto al mensaje: responder a ese aviso (texto o audio)
+    // enruta la orden a ese proyecto sin tener que inferirlo del contenido.
+    const project = session.cwd ? path.basename(session.cwd) : '';
+
     for (const chatId of config.telegram.allowedUserIds) {
-      void bot.api.sendMessage(chatId, text).catch((error: unknown) => {
-        logger.warn('No pude avisar de la sesion terminada', error);
-      });
+      for (const chunk of splitMessage(text)) {
+        // Mismo tratamiento que en el bot: el resumen llega en Markdown y hay
+        // que convertirlo a HTML para que Telegram lo renderice.
+        const html = markdownToTelegramHtml(chunk);
+        void bot.api
+          .sendMessage(chatId, html, { parse_mode: 'HTML' })
+          .catch(() => bot.api.sendMessage(chatId, chunk))
+          .then((message) => {
+            if (project && message) {
+              replyRoutes.remember(message.message_id, { project, sessionId: session.id });
+            }
+          })
+          .catch((error: unknown) => {
+            logger.warn('No pude avisar de la sesion terminada', error);
+          });
+      }
     }
   };
 

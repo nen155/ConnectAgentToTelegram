@@ -17,7 +17,7 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
 | `npm run tray:lint` | valida la sintaxis de `scripts/tray.ps1` |
 | `npm run tray:install` / `tray:uninstall` | alta/baja del arranque con Windows |
 | `npm run typecheck` | `tsc --noEmit` (obligatorio antes de dar algo por terminado) |
-| `npm test` | jest + ts-jest (109 pruebas) |
+| `npm test` | jest + ts-jest (114 pruebas) |
 | `npm run smoke` | pipeline de audio real: TTS -> OGG/Opus -> whisper.cpp -> texto |
 | `npm run check:telegram` | valida el token del bot y avisa si hay webhook (incompatible con long polling) |
 | `npm run check:devin` | ejecuta una orden real por el mismo runner que usa el bot |
@@ -92,13 +92,38 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
   compositor de la ventana del IDE con UI Automation. Datos comprobados:
   - Las ventanas de Devin Desktop se titulan `<carpeta> - Devin` (varias en un mismo proceso).
   - `ControlViewWalker` no expone el DOM; hay que usar **`RawViewWalker`**.
-  - El compositor es un `ControlType.Edit` con `Name = 'Prompt'` y soporta `ValuePattern` (escribir
-    sin teclas). `SetFocus()` sobre el elemento funciona aunque `SetForegroundWindow` falle.
+  - El compositor es un `ControlType.Edit` con `Name = 'Prompt'` y soporta `ValuePattern`, pero
+    **no se usa para escribir**: `SetValue` deja el editor Slate desincronizado y el usuario luego no
+    puede teclear. Se escribe **pegando con Ctrl+V** (evento real) tras verificar el foco.
+  - **Nunca pisar un borrador**: si el compositor tiene texto (distinto del placeholder
+    `Guia a Devin...`), el script aborta con `COMPOSITOR_OCUPADO`.
+  - Tras el pegado el nodo UIA se recrea: la comprobacion de foco es **por tipo y nombre**, no por
+    identidad (`Automation.Compare` da falso negativo).
   - **Nunca usar `SendKeys` a ciegas**: un `Ctrl+L` con el foco mal puesto acabo en la barra de
     direcciones de un Chromium. Solo se pulsa Enter tras verificar el texto y el foco.
+  - **El boton del compositor cambia con el estado de la sesion**: idle = `Enviar` (deshabilitado si
+    el compositor esta vacio); trabajando = `Detener Devin`. Ambos solo existen en el arbol **raw** y
+    soportan `InvokePattern`.
+  - **Con la sesion trabajando, Enter NO envia: encola** el mensaje dentro del IDE y el compositor se
+    vacia (parece que borra la orden) dejando un trabajo en cola que no arranca. Por eso se comprueba
+    `Detener Devin` antes de pegar y se aborta con `SESION_OCUPADA`; la orden cae al CLI.
+  - **Se envia pulsando `Enviar`** (`InvokePattern`), no con Enter; Enter queda solo como ultimo
+    recurso con el foco verificado. Enviado = el compositor vuelve a mostrar el placeholder.
+  - **Windows no activa ventanas a un proceso en segundo plano**: `SetForegroundWindow` devuelve true
+    sin cambiar nada y el `Ctrl+V` se pierde. Hay que inyectar un ALT (down/up) antes; verificado que
+    es lo que desbloquea el primer plano.
+  - **Nunca borrar el compositor ante un fallo**: si algo sale mal, la orden se queda escrita para
+    que el usuario la envie a mano.
   - El valor del `ValuePattern` incluye el placeholder cuando esta vacio: comparar contra el texto
     enviado, no contra cadena vacia.
-  - `-DryRun` detecta ventana y control; `-NoSubmit` escribe, verifica y borra (pruebas sin enviar).
+  - `-DryRun` detecta ventana y control; `-NoSubmit` pega y limpia (pruebas sin enviar).
+  - `-ListWindows` devuelve JSON con `{project,title}` de cada ventana (`project` = texto antes de
+    ` - Devin`). PowerShell 5.1 **no** soporta `ConvertTo-Json -AsArray`: usar
+    `ConvertTo-Json -InputObject @($x)`.
+  - **Enrutado por proyecto**: `matchProject()` (`src/devin/projectMatch.ts`) empareja el texto de la
+    orden con los nombres de ventana (sin acentos ni mayusculas, palabras de 4+ caracteres). Si el
+    proyecto mencionado no tiene ventana abierta, se comprueba contra los proyectos conocidos de
+    `sessions.db` y se avisa **sin** caer en la ventana por defecto.
 
 ## Convenciones del proyecto
 
@@ -107,6 +132,10 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
   debe respetar ese candado; la bandeja comprueba el estado leyendo el lock, no con un handle propio.
 - La bandeja (`scripts/tray.ps1`) lanza el puente como `node --import tsx src/index.ts` y lo mata con
   `taskkill /T /F`. No usa ventana de consola: el log vive en `data/logs/`.
+- **Los resumenes de Telegram no son la salida completa.** `summarizeMessage()` (`src/core/sessionDigest.ts`)
+  conserva el principio y el final del mensaje, con `…` marcando el hueco: la conclusion de lo que hizo
+  el modelo esta al final. Se usa en `buildSummary()` y en el aviso de sesiones. No truncar solo por el
+  principio.
 - Textos de usuario (mensajes del bot, errores, README) en **español sin tildes en identificadores**;
   el codigo y los nombres de API en ingles.
 - Comentarios solo donde explican *por que*, no *que*.
