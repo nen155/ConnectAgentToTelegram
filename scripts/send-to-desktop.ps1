@@ -5,7 +5,9 @@ param(
     # Pega y limpia sin enviar. Para probar sin lanzar nada.
     [switch]$NoSubmit,
     # Devuelve en JSON las ventanas de Devin Desktop abiertas y su proyecto.
-    [switch]$ListWindows
+    [switch]$ListWindows,
+    # Sufijo del titulo de la ventana (" - Devin" en Devin Desktop).
+    [string]$WindowSuffix = ' - Devin'
 )
 
 # Envia una orden al compositor de la ventana de Devin Desktop cuyo titulo empieza por el
@@ -18,6 +20,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
+
+# Los scriptblocks que se pasan a EnumWindows no ven las variables locales de la funcion
+# que los crea: el sufijo del titulo tiene que vivir en $script:.
+$script:windowSuffix = $WindowSuffix
 
 Add-Type @"
 using System;
@@ -38,15 +44,16 @@ public class WinEnum {
 }
 "@
 
-function Find-ProjectWindow([string]$name) {
+function Find-ProjectWindow([string]$name, [string]$suffix) {
     $script:found = $null
+    $script:matchPrefix = "$name$suffix"
     $callback = [WinEnum+EnumWindowsProc]{
         param($handle, $state)
         if ([WinEnum]::IsWindowVisible($handle)) {
             $buffer = New-Object System.Text.StringBuilder 512
             [void][WinEnum]::GetWindowText($handle, $buffer, 512)
             $title = $buffer.ToString()
-            if ($title -like "$name - Devin*") { $script:found = $handle }
+            if ($title.StartsWith($script:matchPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { $script:found = $handle }
         }
         return $true
     }
@@ -225,7 +232,7 @@ if ($ListWindows) {
             $buffer = New-Object System.Text.StringBuilder 512
             [void][WinEnum]::GetWindowText($handle, $buffer, 512)
             $title = $buffer.ToString()
-            $marker = ' - Devin'
+            $marker = $script:windowSuffix
             $index = $title.IndexOf($marker)
             if ($index -gt 0) {
                 $script:all += [pscustomobject]@{
@@ -261,9 +268,9 @@ if (-not $prompt) {
     exit 1
 }
 
-$handle = Find-ProjectWindow $Project
+$handle = Find-ProjectWindow $Project $WindowSuffix
 if (-not $handle) {
-    Write-Output "SIN_VENTANA: no hay ninguna ventana '$Project - Devin' abierta"
+    Write-Output "SIN_VENTANA: no hay ninguna ventana '$Project$WindowSuffix' abierta"
     exit 2
 }
 

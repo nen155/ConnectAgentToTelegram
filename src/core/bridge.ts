@@ -5,10 +5,9 @@ import type { AppConfig } from '../config';
 import type { Logger } from '../logger';
 import type { Transcriber } from '../audio/whisper';
 import type { TextToSpeech } from '../audio/tts';
-import type { DevinRunner } from '../devin/devinRunner';
-import type { SessionStore } from '../devin/sessionStore';
-import type { DesktopRouter } from '../devin/desktopRouter';
-import { matchProject } from '../devin/projectMatch';
+import type { SessionStore } from './sessionStore';
+import type { AgentCli, AgentDesktop } from '../agents/types';
+import { matchProject } from '../agents/projectMatch';
 import type { KeyedQueue } from './taskQueue';
 import type { BridgeState, StatusPublisher } from './statusPublisher';
 import { TaskRegistry, type TaskRecord } from './taskRegistry';
@@ -38,7 +37,7 @@ export interface IdeSessionRoute {
 }
 
 export interface BridgeDeps {
-  runner: Pick<DevinRunner, 'run'>;
+  runner: AgentCli;
   transcriber: Pick<Transcriber, 'transcribe' | 'name'>;
   tts: Pick<TextToSpeech, 'synthesize'> | null;
   store: SessionStore;
@@ -51,7 +50,7 @@ export interface BridgeDeps {
   /** Resuelve la sesion del IDE para el proyecto configurado, si existe. */
   resolveIdeSession?: () => Promise<IdeSessionRoute | null>;
   /** Escribe la orden en la ventana del IDE (DEVIN_ROUTE=desktop). */
-  desktop?: Pick<DesktopRouter, 'send' | 'listWindows'>;
+  desktop?: AgentDesktop;
   /** Proyectos conocidos (carpetas de sesiones recientes), para detectar menciones sin ventana. */
   knownProjects?: () => Promise<string[]>;
   /** Guarda el proyecto asociado a un mensaje enviado, para enrutar respuestas. */
@@ -140,8 +139,8 @@ export class CommandBridge {
     let note: string | undefined;
     const agentPrompt = withLanguageInstruction(prompt, config.summaryLanguage);
 
-    // Enrutado al IDE: se escribe la orden en el compositor de su ventana.
-    if (config.devin.route === 'desktop' && this.deps.desktop) {
+    // Enrutado a la UI del agente: su ventana (Devin Desktop) o la terminal del IDE.
+    if (config.agent.route === 'desktop' && this.deps.desktop) {
       const windows = await this.deps.desktop.listWindows().catch(() => []);
       const mentioned = matchProject(prompt, windows);
 
@@ -158,8 +157,8 @@ export class CommandBridge {
         mentioned?.window.project ??
         (mentionedClosed
           ? undefined
-          : windows.some((window) => window.project === config.devin.projectName)
-            ? config.devin.projectName
+          : windows.some((window) => window.project === config.agent.projectName)
+            ? config.agent.projectName
             : undefined);
 
       if (target) {
@@ -176,7 +175,7 @@ export class CommandBridge {
               ? 'por el proyecto que has nombrado'
               : 'por la carpeta de trabajo';
           const sent = await notifier.text(
-            `📨 Orden enviada a la ventana de Devin Desktop "${target}" (${how}).\n` +
+            `📨 Orden enviada a ${config.agent.label} en "${target}" (${how}).\n` +
               'Te aviso con el resumen cuando termine: lo detecta el monitor de sesiones.'
           );
           if (sent?.messageId) this.deps.rememberRoute?.(sent.messageId, target);
@@ -185,17 +184,17 @@ export class CommandBridge {
         }
 
         note = attempt.reason?.startsWith('SESION_OCUPADA')
-          ? `⚠️ La ventana de "${target}" esta trabajando y no la pongo en cola; ejecuto la orden en el CLI.`
-          : `⚠️ No pude escribir en la ventana de "${target}" (${attempt.reason ?? 'sin acceso'}); la ejecuto en el CLI.`;
+          ? `⚠️ ${config.agent.label} esta trabajando en "${target}" y no la pongo en cola; ejecuto la orden en el CLI.`
+          : `⚠️ No pude escribir en ${config.agent.label} ("${target}"): ${attempt.reason ?? 'sin acceso'}; la ejecuto en el CLI.`;
         logger.warn('No se pudo enviar al IDE', { project: target, reason: attempt.reason });
       } else if (mentionedClosed) {
         note = `⚠️ La ventana de "${mentionedClosed.window.project}" no esta abierta; la ejecuto en el CLI.`;
       } else {
-        note = `⚠️ No hay ninguna ventana de Devin Desktop abierta para "${config.devin.projectName}"; la ejecuto en el CLI.`;
+        note = `⚠️ No hay ninguna ventana abierta para "${config.agent.projectName}"; la ejecuto en el CLI.`;
       }
     }
 
-    // Solo el camino CLI hace cola; los envios a la ventana del IDE son inmediatos.
+    // Solo el camino CLI hace cola; los envios a la UI del agente son inmediatos.
     const running = this.registry.active();
     const current = running[0];
     if (current) {
@@ -214,11 +213,11 @@ export class CommandBridge {
         if (transcribeMs === undefined) await notifier.text('🤖 Trabajando...');
 
         const session = this.deps.store.get(chatId);
-        const continuity = config.devin.continuity;
+        const continuity = config.agent.continuity;
         let sessionId = continuity === 'new' ? undefined : session?.sessionId;
 
         // Enrutado: si el proyecto esta abierto en el IDE, la orden continua esa conversacion.
-        if (config.devin.route === 'auto' && this.deps.resolveIdeSession) {
+        if (config.agent.route === 'auto' && this.deps.resolveIdeSession) {
           const ide = await this.deps.resolveIdeSession().catch(() => null);
           if (ide && !ide.busy) {
             sessionId = ide.id;
@@ -235,12 +234,12 @@ export class CommandBridge {
           prompt: agentPrompt,
           sessionId,
           allowContinue,
-          cwd: config.devin.workdir,
-          timeoutMs: config.devin.timeoutMs
+          cwd: config.agent.workdir,
+          timeoutMs: config.agent.timeoutMs
         });
 
         await this.deps.store.record(chatId, {
-          cwd: config.devin.workdir,
+          cwd: config.agent.workdir,
           sessionId: result.sessionId,
           lastPrompt: prompt
         });

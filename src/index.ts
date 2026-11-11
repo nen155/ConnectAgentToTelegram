@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { loadConfig, PROJECT_ROOT } from './config';
+import { loadConfig } from './config';
 import { createLogger } from './logger';
 import { KeyedQueue } from './core/taskQueue';
 import { CommandBridge } from './core/bridge';
@@ -8,17 +8,15 @@ import {
   SessionMonitor,
   findProjectSession,
   formatFinishedSession,
-  readSessions,
   type SessionSnapshot
 } from './core/sessionMonitor';
 import { StatusPublisher } from './core/statusPublisher';
 import { acquireLock, releaseLock } from './core/singleInstance';
-import { SessionStore } from './devin/sessionStore';
-import { DesktopRouter } from './devin/desktopRouter';
-import { DevinRunner } from './devin/devinRunner';
+import { SessionStore } from './core/sessionStore';
+import { createAgent } from './agents/registry';
 import { WhisperCppTranscriber } from './audio/whisper';
 import { WindowsSapiTts } from './audio/tts';
-import { MockDevinRunner, MockTranscriber } from './mocks';
+import { MockAgentRunner, MockTranscriber } from './mocks';
 import { createTelegramBot, splitMessage } from './telegram/bot';
 import { ReplyRouteStore } from './telegram/replyRoutes';
 import { markdownToTelegramHtml } from './telegram/format';
@@ -52,7 +50,10 @@ async function main(): Promise<void> {
   await fs.mkdir(config.paths.tmp, { recursive: true });
   await fs.mkdir(config.paths.data, { recursive: true });
 
-  const readiness = await inspectReadiness(config);
+  // El agente se elige con AGENT; el resto del puente solo conoce sus puertos.
+  const agent = createAgent(config);
+
+  const readiness = await inspectReadiness(config, agent);
   if (readiness.ok) {
     logger.info('Comprobaciones previas OK');
   } else {
@@ -63,7 +64,9 @@ async function main(): Promise<void> {
   await store.load();
 
   if (config.mockMode) {
-    logger.warn('MOCK_MODE activo: la transcripcion y las respuestas son simuladas (no se llama a Devin ni a whisper).');
+    logger.warn(
+      `MOCK_MODE activo: la transcripcion y las respuestas son simuladas (no se llama a ${agent.label} ni a whisper).`
+    );
   }
 
   const transcriber = config.mockMode
@@ -89,15 +92,10 @@ async function main(): Promise<void> {
       })
     : null;
 
-  const runner = config.mockMode
-    ? new MockDevinRunner()
-    : new DevinRunner({
-        bin: config.devin.bin,
-        permissionMode: config.devin.permissionMode,
-        model: config.devin.model,
-        extraArgs: config.devin.extraArgs,
-        tmpDir: config.paths.tmp
-      });
+  const runner = config.mockMode ? new MockAgentRunner() : agent.cli;
+
+  const readSessions = (options: { limit?: number; withinMs?: number } = {}): SessionSnapshot[] =>
+    agent.sessions?.read(options) ?? [];
 
   const replyRoutes = new ReplyRouteStore(config.paths.replyRoutesFile);
   await replyRoutes.load();
@@ -111,7 +109,7 @@ async function main(): Promise<void> {
   let refreshStatus: () => void = () => undefined;
 
   const monitor = new SessionMonitor({
-    dbPath: config.devin.sessionsDb,
+    read: () => readSessions(),
     logger,
     onFinished: (session) => notifyFinishedSession(session),
     onChanged: () => refreshStatus(),
@@ -136,18 +134,14 @@ async function main(): Promise<void> {
     status,
     sessions: () => monitor.sessions(),
     rememberRoute: (messageId, project) => replyRoutes.remember(messageId, { project }),
-    desktop: new DesktopRouter({
-      scriptPath: path.join(PROJECT_ROOT, 'scripts', 'send-to-desktop.ps1'),
-      tmpDir: config.paths.tmp,
-      projectName: config.devin.projectName
-    }),
+    desktop: agent.desktop ?? undefined,
     knownProjects: async () => {
-      const sessions = readSessions(config.devin.sessionsDb, { limit: 20, withinMs: 7 * 24 * 60 * 60 * 1000 });
+      const sessions = readSessions({ limit: 20, withinMs: 7 * 24 * 60 * 60 * 1000 });
       const names = sessions.map((session) => path.basename(session.cwd)).filter(Boolean);
       return [...new Set(names)];
     },
     resolveIdeSession: async () => {
-      const sessions = readSessions(config.devin.sessionsDb, { limit: 20, withinMs: 24 * 60 * 60 * 1000 });
+      const sessions = readSessions({ limit: 20, withinMs: 24 * 60 * 60 * 1000 });
       const ownSessions = new Set(
         store
           .list()
@@ -155,17 +149,17 @@ async function main(): Promise<void> {
           .filter((id): id is string => Boolean(id))
       );
 
-      const match = findProjectSession(sessions, config.devin.workdir, ownSessions);
+      const match = findProjectSession(sessions, config.agent.workdir, ownSessions);
       if (!match) return null;
       return { id: match.id, title: match.title, busy: match.state === 'working' };
     }
   });
   refreshStatus = () => void bridge.refreshStatus();
 
-  const bot = createTelegramBot({ config, bridge, store, queue, logger, replyRoutes });
+  const bot = createTelegramBot({ config, bridge, store, queue, logger, agent, replyRoutes });
 
   notifyFinishedSession = (session) => {
-    const text = formatFinishedSession(session);
+    const text = formatFinishedSession(session, Date.now(), config.agent.label);
     logger.info('Aviso de sesion terminada', { sesion: session.id, resumenChars: session.lastText.length });
 
     // El proyecto se guarda junto al mensaje: responder a ese aviso (texto o audio)
@@ -209,7 +203,8 @@ async function main(): Promise<void> {
     drop_pending_updates: true,
     onStart: (info) => {
       logger.info(`Escuchando como @${info.username} (${info.first_name})`);
-      logger.info(`Carpeta de trabajo: ${config.devin.workdir}`);
+      logger.info(`Agente: ${agent.label} (${agent.name}); ruta: ${config.agent.route}`);
+      logger.info(`Carpeta de trabajo: ${config.agent.workdir}`);
     }
   });
 }

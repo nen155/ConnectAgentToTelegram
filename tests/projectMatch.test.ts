@@ -1,4 +1,4 @@
-import { matchProject, type DesktopWindow } from '../src/devin/projectMatch';
+import { matchProject, type DesktopWindow } from '../src/agents/projectMatch';
 
 const WINDOWS: DesktopWindow[] = [
   { project: 'ConnectAgentToTelegram', title: 'ConnectAgentToTelegram - Devin - README.md' },

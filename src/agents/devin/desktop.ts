@@ -1,22 +1,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { runCommand, stripAnsi } from '../util/process';
-import type { DesktopWindow } from './projectMatch';
+import { runCommand, stripAnsi } from '../../util/process';
+import type { AgentDesktop, DesktopSendResult, DesktopWindow } from '../types';
 
-export interface DesktopSendResult {
-  sent: boolean;
-  reason?: string;
-  /** Proyecto (ventana) al que se envio. */
-  project?: string;
-}
-
-export interface DesktopRouterOptions {
+export interface DevinDesktopOptions {
   /** Ruta a scripts/send-to-desktop.ps1 */
   scriptPath: string;
   tmpDir: string;
-  /** Proyecto por defecto (carpeta de DEVIN_WORKDIR). */
+  /** Proyecto por defecto (carpeta de trabajo del agente). */
   projectName: string;
+  /** Sufijo del titulo de la ventana (" - Devin"). */
+  windowSuffix?: string;
   exec?: typeof runCommand;
 }
 
@@ -26,8 +21,12 @@ export interface DesktopRouterOptions {
  * 'Prompt'); si la ventana o el control no aparecen, devuelve el motivo y el llamador
  * decide si cae al CLI.
  */
-export class DesktopRouter {
-  constructor(private readonly options: DesktopRouterOptions) {}
+export class DevinDesktop implements AgentDesktop {
+  constructor(private readonly options: DevinDesktopOptions) {}
+
+  private get windowSuffix(): string {
+    return this.options.windowSuffix ?? ' - Devin';
+  }
 
   private get exec(): typeof runCommand {
     return this.options.exec ?? runCommand;
@@ -44,7 +43,9 @@ export class DesktopRouter {
           'Bypass',
           '-File',
           this.options.scriptPath,
-          '-ListWindows'
+          '-ListWindows',
+          '-WindowSuffix',
+          this.windowSuffix
         ],
         { timeoutMs: 30_000 }
       );
@@ -89,7 +90,9 @@ export class DesktopRouter {
           '-Project',
           target,
           '-PromptFile',
-          promptFile
+          promptFile,
+          '-WindowSuffix',
+          this.windowSuffix
         ],
         { timeoutMs: 60_000 }
       );

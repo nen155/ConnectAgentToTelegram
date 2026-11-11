@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DesktopRouter } from '../src/devin/desktopRouter';
+import { DevinDesktop } from '../src/agents/devin/desktop';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-router-'));
 
-function routerWith(exec: jest.Mock): DesktopRouter {
-  return new DesktopRouter({
+function routerWith(exec: jest.Mock): DevinDesktop {
+  return new DevinDesktop({
     scriptPath: 'scripts/send-to-desktop.ps1',
     tmpDir,
     projectName: 'mi-proyecto',
@@ -14,7 +14,7 @@ function routerWith(exec: jest.Mock): DesktopRouter {
   });
 }
 
-describe('DesktopRouter', () => {
+describe('DevinDesktop', () => {
   it('considera enviada la orden cuando el script responde OK_ENVIADA', async () => {
     const exec = jest.fn(async () => ({ stdout: 'OK_ENVIADA\n', stderr: '', code: 0, timedOut: false }));
     const result = await routerWith(exec).send('arregla el bug');

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { SessionStore } from '../src/devin/sessionStore';
+import { SessionStore } from '../src/core/sessionStore';
 
 describe('SessionStore', () => {
   let dir: string;

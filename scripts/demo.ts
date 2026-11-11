@@ -9,8 +9,8 @@ import { loadConfig } from '../src/config';
 import { createLogger } from '../src/logger';
 import { CommandBridge, type Notifier } from '../src/core/bridge';
 import { KeyedQueue } from '../src/core/taskQueue';
-import { SessionStore } from '../src/devin/sessionStore';
-import { MockDevinRunner, MockTranscriber } from '../src/mocks';
+import { SessionStore } from '../src/core/sessionStore';
+import { MockAgentRunner, MockTranscriber } from '../src/mocks';
 
 async function main(): Promise<void> {
   const config = loadConfig({ ...process.env, TELEGRAM_BOT_TOKEN: 'demo' });
@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   await store.load();
 
   const bridge = new CommandBridge({
-    runner: new MockDevinRunner(),
+    runner: new MockAgentRunner(),
     transcriber: new MockTranscriber(),
     tts: null,
     store,
@@ -34,7 +34,7 @@ async function main(): Promise<void> {
     voice: async () => undefined
   };
 
-  console.log('Demo con mocks: no se llama a Devin, whisper ni Telegram.\n');
+  console.log('Demo con mocks: no se llama al agente, ni a whisper, ni a Telegram.\n');
 
   console.log('--- 1) Llega una nota de voz ---');
   await bridge.handleVoice('demo', 'audio-simulado.ogg', notifier);

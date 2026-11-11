@@ -17,10 +17,10 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
 | `npm run tray:lint` | valida la sintaxis de `scripts/tray.ps1` |
 | `npm run tray:install` / `tray:uninstall` | alta/baja del arranque con Windows |
 | `npm run typecheck` | `tsc --noEmit` (obligatorio antes de dar algo por terminado) |
-| `npm test` | jest + ts-jest (114 pruebas) |
+| `npm test` | jest + ts-jest (165 pruebas) |
 | `npm run smoke` | pipeline de audio real: TTS -> OGG/Opus -> whisper.cpp -> texto |
 | `npm run check:telegram` | valida el token del bot y avisa si hay webhook (incompatible con long polling) |
-| `npm run check:devin` | ejecuta una orden real por el mismo runner que usa el bot |
+| `npm run check:agent` | ejecuta una orden real por el adaptador del agente (`AGENT`); `check:devin` es alias |
 | `npm run setup:whisper` | descarga whisper.cpp + modelo (`-- -Model medium` para otro) |
 
 ## Verificacion minima antes de cerrar un cambio
@@ -35,7 +35,7 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
 
 - **`ACP_BACKEND=windsurf` rompe la autenticacion.** La app de escritorio de Devin la exporta a sus
   hijos; con ella el CLI usa el backend de Windsurf y responde `Not logged in` aunque la sesion este
-  iniciada. En una terminal normal esa variable no existe. `src/devin/env.ts` la elimina antes de
+  iniciada. En una terminal normal esa variable no existe. `src/agents/devin/env.ts` la elimina antes de
   lanzar el CLI. Si vuelve a decir "Not logged in", comprobar esto ANTES de rehacer el login.
 - **Los flags van antes de `--`.** `--` corta el analisis de opciones: lo que se ponga despues se
   interpreta como texto de la orden, asi que `--permission-mode` o `--respect-workspace-trust` ahi
@@ -120,10 +120,48 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
   - `-ListWindows` devuelve JSON con `{project,title}` de cada ventana (`project` = texto antes de
     ` - Devin`). PowerShell 5.1 **no** soporta `ConvertTo-Json -AsArray`: usar
     `ConvertTo-Json -InputObject @($x)`.
-  - **Enrutado por proyecto**: `matchProject()` (`src/devin/projectMatch.ts`) empareja el texto de la
+  - **Enrutado por proyecto**: `matchProject()` (`src/agents/projectMatch.ts`) empareja el texto de la
     orden con los nombres de ventana (sin acentos ni mayusculas, palabras de 4+ caracteres). Si el
     proyecto mencionado no tiene ventana abierta, se comprueba contra los proyectos conocidos de
     `sessions.db` y se avisa **sin** caer en la ventana por defecto.
+
+## Multiagente (Devin, OpenCode, Codex, Claude Code, OpenAI)
+
+- **El nucleo no conoce agentes.** `src/core/bridge.ts` recibe `AgentCli`, `AgentDesktop` y
+  `AgentSessions` (`src/agents/types.ts`); `src/agents/registry.ts` elige el adaptador segun
+  `AGENT`. Anadir un agente = una carpeta en `src/agents/<nombre>/` + registrarlo. No se toca el
+  flujo, la cola, Telegram ni la bandeja.
+- **Config por agente.** `AGENT` elige; cada bloque (`config.agents.devin|opencode|codex|claude|openai`)
+  tiene sus variables. `AGENT_WORKDIR|ROUTE|CONTINUITY|TIMEOUT_MS` mandan sobre los historicos
+  `DEVIN_*`, que se siguen aceptando. `config.agent` es el bloque comun ya resuelto.
+- **`AGENT_ROUTE=desktop` = la UI de ese agente**: la ventana de Devin Desktop para Devin, la
+  terminal integrada del IDE para las TUI. `openai` no tiene UI: siempre va por API.
+
+### Hechos comprobados por agente
+
+- **OpenCode** (probado 1.15.4): `opencode run [--session <id>|--continue] [--model p/m] [--agent a]
+  [--dangerously-skip-permissions] -- "<orden>"`. El `--` es necesario para que una orden que empiece
+  por `-` no se lea como flag. **No imprime el id de sesion**: se recupera de su base
+  (`~/.local/share/opencode/opencode.db`, tabla `session.directory` + `time_updated`).
+  Esquema: `session`, `message.data` (JSON con `role`), `part.data` (JSON; el texto es
+  `{type:'text', text}`). El plan gratuito exige >= 1.18 y **el error se imprime en stdout con codigo
+  0**: por eso `friendlyOpenCodeError()` mira el texto, no el codigo de salida.
+- **Codex**: `codex exec [flags] [resume <id>|resume --last] -- "<orden>"`. Los flags van **entre
+  `exec` y `resume`** (el parser no los acepta despues). Sesiones: `~/.codex/sessions/**/*.jsonl`;
+  la primera linea es `session_meta` con `{id, cwd}` y los mensajes son `response_item` con
+  `payload.type='message'` y `content[].text`. No instalado en esta maquina: sin verificar en real.
+- **Claude Code**: `claude -p --output-format json [--resume <id>|--continue] [--permission-mode m]
+  -- "<orden>"`. La salida JSON trae `result`, `session_id` e `is_error`. Transcripciones en
+  `~/.claude/projects/<proyecto>/<session-id>.jsonl` (`type`, `sessionId`, `cwd`,
+  `message.content`). No instalado: sin verificar en real.
+- **OpenAI API**: `POST <base>/chat/completions`, compatible con servidores locales (LM Studio,
+  Ollama, OpenRouter). Historial en memoria por sesion: se pierde al reiniciar. No ejecuta
+  herramientas ni toca el repositorio.
+- **Terminal integrada** (`scripts/send-to-terminal.ps1`): la terminal **no esta** en el arbol de
+  control; se busca en el raw por clase `xterm*` o nombre `*Terminal*` y **exige** que coincida con
+  `-Expect` (patron por agente) antes de pegar. xterm no expone su contenido por UI Automation: no se
+  puede verificar lo escrito, solo el foco. Sin terminal abierta no hay nada que probar: pendiente de
+  validacion real.
 
 ## Convenciones del proyecto
 

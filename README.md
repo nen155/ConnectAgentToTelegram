@@ -18,12 +18,14 @@ llega al modelo, igual que si la escribieras en la terminal.
 ## Características
 
 - **Manos libres**: dictas desde el móvil y el agente trabaja en tu PC.
+- **Multiagente**: Devin, OpenCode, Codex, Claude Code o la API de OpenAI, con el mismo bot y la
+  misma bandeja. Se elige con `AGENT` y cada uno tiene su propio bloque de configuración.
 - **Transcripción local** con whisper.cpp (sin APIs de terceros).
 - **Respuesta en audio** con las voces de Windows (System.Speech) y conversión a OGG/Opus.
 - **Hilo de conversación por chat**: cada chat mantiene su sesión del agente (`--resume`).
 - **Cola por chat**: si mandas varias órdenes seguidas, se ejecutan en orden y te avisa de la posición.
-- **Sesiones de Devin a la vista**: el puente lee la base de sesiones del CLI y muestra en el panel
-  todas las sesiones recientes (del IDE y del CLI) con su estado; cuando una termina su turno, te
+- **Sesiones del agente a la vista**: el puente lee el almacén de sesiones del agente y muestra en el
+  panel todas las recientes (del IDE y del CLI) con su estado; cuando una termina su turno, te
   avisa por Telegram **con el resumen de lo que hizo**.
 - **Bandeja del sistema**: icono con estado, panel de actividad (doble clic) y control de
   iniciar / detener / reiniciar. Arranque automático con Windows.
@@ -36,7 +38,7 @@ llega al modelo, igual que si la escribieras en la terminal.
 |---|---|---|
 | Node.js >= 20.11 | Sí | Probado con Node 22 |
 | ffmpeg en el PATH | Sí | Necesita `libopus` (las builds habituales lo traen) |
-| Devin CLI + sesión iniciada | Sí (salvo modo demo) | Ver más abajo |
+| Un agente instalado y autenticado | Sí (salvo modo demo) | Devin, OpenCode, Codex, Claude Code o una API key de OpenAI |
 | whisper.cpp + modelo | Se descarga | `npm run setup:whisper` (~490 MB el modelo `small`) |
 | Windows | Solo para TTS y bandeja | El resto (bot, transcripción, cola) es portable |
 
@@ -52,8 +54,57 @@ npm run setup:whisper          # descarga whisper.cpp y el modelo ggml-small
 Si vas a usar un agente real, instala su CLI y autentícalo una vez:
 
 ```powershell
-irm https://static.devin.ai/cli/setup.ps1 | iex   # Windows
+# Devin
+irm https://static.devin.ai/cli/setup.ps1 | iex
 devin auth login
+
+# OpenCode
+npm i -g opencode-ai
+opencode auth login
+
+# Codex (OpenAI)
+npm i -g @openai/codex
+codex login
+
+# Claude Code
+npm i -g @anthropic-ai/claude-code
+claude
+```
+
+La API de OpenAI no necesita CLI: basta `OPENAI_API_KEY`.
+
+## Agentes: uno a la vez, mismo puente
+
+El agente se elige con `AGENT` (`devin` por defecto). El núcleo no conoce a ninguno en concreto:
+habla con tres puertos (`src/agents/types.ts`) y cada agente aporta su adaptador.
+
+| `AGENT` | Ejecuta | Reanuda | Sesiones para el panel | Escribe en la UI |
+|---|---|---|---|---|
+| `devin` | `devin --print` | `--resume` / `--continue` | `sessions.db` del CLI (IDE + CLI) | Ventana de Devin Desktop (UI Automation) |
+| `opencode` | `opencode run` | `--session` / `--continue` | `opencode.db` (`session`, `message`, `part`) | Terminal integrada del IDE |
+| `codex` | `codex exec` | `exec resume <id>` / `--last` | rollouts `.jsonl` de `~/.codex/sessions` | Terminal integrada del IDE |
+| `claude` | `claude -p --output-format json` | `--resume` / `--continue` | transcripciones de `~/.claude/projects` | Terminal integrada del IDE |
+| `openai` | `POST /chat/completions` | hilo en memoria | — | — |
+
+Tres ideas que conviene tener claras:
+
+1. **`AGENT_ROUTE=desktop` significa "la UI de ese agente"**: la ventana de Devin Desktop para Devin
+   y la **terminal integrada del IDE** para las TUI de OpenCode, Codex y Claude Code.
+2. **La terminal es opt-in y va con guardas.** No se escribe si el terminal no se identifica con
+   `OPENCODE_TERMINAL_PATTERN` / `CODEX_TERMINAL_PATTERN` / `CLAUDE_TERMINAL_PATTERN` (por defecto el
+   nombre del agente). Aun así es la ruta más frágil: xterm no expone su contenido, así que no se
+   puede verificar lo escrito. Para el día a día, `AGENT_ROUTE=auto` (reanudar la sesión) es lo
+   recomendado.
+3. **`openai` no es un agente de código**: no tiene herramientas ni acceso al repositorio; es una
+   conversación. Sirve para preguntas, no para "arréglame el bug". Su historial vive en memoria y se
+   pierde al reiniciar el puente.
+
+```bash
+# Ejemplos
+AGENT=opencode npm start
+AGENT=claude AGENT_ROUTE=auto npm start
+AGENT=openai OPENAI_API_KEY=sk-... npm start
+npm run check:agent -- "responde solo OK"   # prueba el agente configurado
 ```
 
 ## Pruébalo en 30 segundos (sin credenciales)
@@ -101,7 +152,7 @@ Comprobaciones útiles sin pasar por el chat:
 ```bash
 npm run smoke            # texto -> TTS -> OGG -> whisper -> texto (valida el audio real)
 npm run check:telegram   # valida el token y avisa si hay un webhook que estorbe
-npm run check:devin      # ejecuta una orden real por el mismo runner que usa el bot
+npm run check:agent      # ejecuta una orden real por el adaptador del agente (AGENT)
 ```
 
 ## Uso
@@ -258,43 +309,75 @@ Todo se ajusta en `.env` (ver `.env.example`). Lo importante:
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — (obligatorio) | Token de @BotFather |
 | `TELEGRAM_ALLOWED_USER_IDS` | vacío | Allowlist. Vacío = el bot solo te dice tu user id, no ejecuta nada |
-| `DEVIN_WORKDIR` | raíz del proyecto | Carpeta donde trabaja el agente |
-| `DEVIN_PERMISSION_MODE` | `dangerous` | `normal`, `accept-edits`, `smart`, `dangerous` |
-| `DEVIN_CONTINUITY` | `auto` | `auto` (reanuda), `new` (sin memoria), `continue` |
-| `DEVIN_ROUTE` | `auto` | `auto`: reanuda la sesión del IDE; `desktop`: escribe en la ventana del IDE; `chat`: sesión propia por chat |
-| `DEVIN_TIMEOUT_MS` | 20 min | Corte de seguridad por orden |
-| `DEVIN_MODEL` | el del CLI | Alias o nombre de modelo |
-| `DEVIN_SESSIONS_DB` | `%APPDATA%\devin\cli\sessions.db` | Base de sesiones para resumir tareas externas |
+| `AGENT` | `devin` | `devin`, `opencode`, `codex`, `claude` u `openai` |
+| `AGENT_WORKDIR` | raíz del proyecto | Carpeta donde trabaja el agente |
+| `AGENT_ROUTE` | `auto` | `auto`: reanuda la sesión del agente; `desktop`: escribe en su UI; `chat`: sesión propia por chat |
+| `AGENT_CONTINUITY` | `auto` | `auto` (reanuda), `new` (sin memoria), `continue` |
+| `AGENT_TIMEOUT_MS` | 20 min | Corte de seguridad por orden |
+| `IDE_WINDOW_SUFFIX` | ` - Devin` | Sufijo del título de las ventanas del IDE |
 | `WHISPER_LANG` | `es` | Idioma de transcripción |
 | `WHISPER_THREADS` | núcleos de la máquina | Hilos de CPU para whisper |
 | `TTS_ENABLED` / `TTS_VOICE` | `true` / voz del sistema | Nota de voz de respuesta |
 | `TTS_MAX_CHARS` | 1200 | Recorta el audio de respuestas muy largas |
 | `MOCK_MODE` | `false` | Transcripción y respuestas simuladas |
 
-### Sobre `DEVIN_PERMISSION_MODE=dangerous`
+Ajustes de cada agente (solo se leen los del `AGENT` elegido):
+
+| Agente | Variables |
+|---|---|
+| Devin | `DEVIN_BIN`, `DEVIN_MODEL`, `DEVIN_PERMISSION_MODE`, `DEVIN_EXTRA_ARGS`, `DEVIN_SESSIONS_DB` |
+| OpenCode | `OPENCODE_BIN`, `OPENCODE_MODEL`, `OPENCODE_AGENT`, `OPENCODE_SKIP_PERMISSIONS`, `OPENCODE_EXTRA_ARGS`, `OPENCODE_SESSIONS_DB`, `OPENCODE_TERMINAL_PATTERN` |
+| Codex | `CODEX_BIN`, `CODEX_MODEL`, `CODEX_FULL_AUTO`, `CODEX_SKIP_GIT_CHECK`, `CODEX_EXTRA_ARGS`, `CODEX_SESSIONS_DIR`, `CODEX_TERMINAL_PATTERN` |
+| Claude Code | `CLAUDE_BIN`, `CLAUDE_MODEL`, `CLAUDE_PERMISSION_MODE`, `CLAUDE_EXTRA_ARGS`, `CLAUDE_PROJECTS_DIR`, `CLAUDE_TERMINAL_PATTERN` |
+| OpenAI | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_MAX_TOKENS`, `OPENAI_TEMPERATURE`, `OPENAI_SYSTEM_PROMPT` |
+
+Los nombres genéricos mandan sobre los históricos: si existen `AGENT_WORKDIR`, `AGENT_ROUTE`,
+`AGENT_CONTINUITY` o `AGENT_TIMEOUT_MS`, se usan en lugar de `DEVIN_WORKDIR`, `DEVIN_ROUTE`,
+`DEVIN_CONTINUITY` y `DEVIN_TIMEOUT_MS`. Un `.env` antiguo sigue funcionando sin tocar nada.
+
+### Sobre los modos sin confirmaciones
 
 En modo no interactivo no hay nadie para aprobar permisos, así que la orden debe venir
-pre-aprobada. `dangerous` (alias `yolo`/`bypass`) ejecuta **cualquier** comando sin preguntar.
+pre-aprobada. Cada agente tiene su equivalente, y todos ejecutan **cualquier** comando sin preguntar:
+
+| Agente | Ajuste por defecto |
+|---|---|
+| Devin | `DEVIN_PERMISSION_MODE=dangerous` (alias `yolo`/`bypass`) |
+| OpenCode | `OPENCODE_SKIP_PERMISSIONS=true` (`--dangerously-skip-permissions`) |
+| Codex | `CODEX_FULL_AUTO=true` (`--full-auto`) |
+| Claude Code | `CLAUDE_PERMISSION_MODE=bypassPermissions` |
+
 Mitigaciones incluidas:
 
 - allowlist de Telegram: si está vacía, el bot no ejecuta nada y solo devuelve el user id;
-- `DEVIN_WORKDIR` acota la carpeta de trabajo (el agente puede salir con rutas absolutas: usa una
+- `AGENT_WORKDIR` acota la carpeta de trabajo (el agente puede salir con rutas absolutas: usa una
   carpeta de confianza);
 - instancia única para no duplicar sesiones.
 
-Si prefieres algo más conservador, usa `accept-edits` (edita archivos, no ejecuta shell) o `smart`
-(un modelo rápido decide si un comando es seguro). A cambio, algunas órdenes fallarán porque nadie
-aprueba el comando.
+Si prefieres algo más conservador, baja el permiso de tu agente (`accept-edits`, `acceptEdits`,
+`--full-auto=false`...). A cambio, algunas órdenes fallarán porque nadie aprueba el comando.
 
 ## Estructura
 
 ```
 src/
   index.ts              arranque y cableado de dependencias
-  config.ts             lectura y validación del .env (zod)
-  readiness.ts          comprobación de CLI, whisper, ffmpeg y TTS
+  config.ts             lectura y validación del .env (zod), un bloque por agente
+  readiness.ts          comprobación del agente, whisper, ffmpeg y TTS
+  agents/
+    types.ts            puertos: AgentCli, AgentSessions, AgentDesktop
+    registry.ts         createAgent(): elige el adaptador según AGENT
+    projectMatch.ts     empareja la orden con un proyecto abierto
+    devin/              CLI, ventana de Devin Desktop y sessions.db
+    opencode/           opencode run y opencode.db
+    codex/              codex exec y rollouts .jsonl
+    claude/             claude -p y transcripciones .jsonl
+    openai/             API /chat/completions (sin CLI ni IDE)
+    terminal/           escritura en la terminal integrada del IDE
   core/
     bridge.ts           flujo audio -> texto -> agente -> resumen (sin saber de Telegram)
+    sessionMonitor.ts   estado de las sesiones y avisos de turno terminado
+    sessionStore.ts     hilo de conversación por chat (JSON atómico)
     taskQueue.ts        cola FIFO por chat
     taskRegistry.ts     historial de tareas para el panel
     statusPublisher.ts  estado en vivo (data/status.json)
@@ -303,13 +386,9 @@ src/
     ffmpeg.ts           conversiones (WAV 16 kHz y OGG/Opus)
     whisper.ts          transcripción local con whisper.cpp
     tts.ts              síntesis con las voces del sistema
-  devin/
-    devinRunner.ts      invoca el CLI, preflight de sesión, timeout y session id
-    sessionStore.ts     hilo de conversación por chat (JSON atómico)
-    env.ts              sanea el entorno antes de lanzar el CLI
   mocks/                dobles para demo y MOCK_MODE
   telegram/bot.ts       adaptador de Telegram (allowlist, descarga de voz, envío)
-scripts/                setup de whisper, TTS, demo, checks y bandeja
+scripts/                setup de whisper, TTS, demo, checks, bandeja y envío a la UI
 tests/                  pruebas unitarias (jest + ts-jest)
 ```
 
@@ -318,7 +397,7 @@ tests/                  pruebas unitarias (jest + ts-jest)
 ```bash
 npm run dev         # recarga al guardar
 npm run typecheck   # tsc --noEmit
-npm test            # 109 pruebas
+npm test            # 165 pruebas
 npm run demo        # pipeline completo con mocks
 npm run smoke       # pipeline de audio real (requiere whisper + ffmpeg)
 ```
@@ -327,7 +406,7 @@ npm run smoke       # pipeline de audio real (requiere whisper + ffmpeg)
 
 | Síntoma | Causa / solución |
 |---|---|
-| `Devin CLI no tiene sesion iniciada` (pero `devin auth status` dice que sí) | Hay `ACP_BACKEND` en el entorno del proceso. El puente lo elimina solo; revisa `src/devin/env.ts` |
+| `Devin CLI no tiene sesion iniciada` (pero `devin auth status` dice que sí) | Hay `ACP_BACKEND` en el entorno del proceso. El puente lo elimina solo; revisa `src/agents/devin/env.ts` |
 | `La carpeta de trabajo no esta marcada como confiable` | Ejecuta `devin` una vez en esa carpeta y acepta el aviso, o pon `respect_workspace_trust: false` en `.devin/config.local.json` |
 | `Falta whisper.cpp` / `Falta el modelo` | `npm run setup:whisper` |
 | `No pude transcribir el audio` | `npm run smoke`; revisa `WHISPER_THREADS` y que el audio tenga voz |
@@ -352,8 +431,16 @@ Los logs están en `data/logs/bridge.log` y `data/logs/tray.log`.
 - **El estado de una sesión es una heurística**: se considera "trabajando" si hubo actividad en los
   últimos 60 s y "terminada" tras ~20 s sin actividad con un mensaje final del asistente. Una sesión
   abierta pero ociosa puede aparecer como "En pausa" sin haber terminado nada.
-- **El resumen se lee de la base de sesiones del CLI** (`node:sqlite`, aún experimental en Node). Si
-  cambia el esquema en una versión futura, el panel y los avisos dejan de mostrar sesiones.
+- **El resumen se lee del almacén de sesiones del agente** (`node:sqlite` para Devin y OpenCode;
+  `.jsonl` para Codex y Claude Code; nada para OpenAI). Si el agente cambia su esquema en una versión
+  futura, el panel y los avisos dejan de mostrar sesiones: el resto del puente sigue funcionando.
+- **La escritura en la terminal integrada no se puede verificar**: xterm no expone su contenido por UI
+  Automation, así que solo se comprueba el foco y que el terminal coincida con el patrón esperado.
+  Es una ruta opt-in; para el día a día, `AGENT_ROUTE=auto`.
+- **`openai` no toca el repositorio**: es una conversación por API, sin herramientas ni sesiones en
+  disco, y su historial se pierde al reiniciar el puente.
+- **Un agente por ejecución**: `AGENT` se fija al arrancar. Cambiarlo implica reiniciar el puente
+  (o la bandeja), porque cada adaptador cablea su propio CLI, base de sesiones y UI.
 - **TTS y bandeja son de Windows**: en Linux/macOS el bot funciona, pero sin voz de vuelta ni icono.
 
 ## Licencia

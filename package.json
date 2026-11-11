@@ -2,7 +2,7 @@
   "name": "connect-agent-to-telegram",
   "version": "1.0.0",
   "private": true,
-  "description": "Puente de voz entre Telegram y Devin CLI: manda ordenes habladas y recibe el resumen de vuelta.",
+  "description": "Puente de voz entre Telegram y agentes de codigo locales (Devin, OpenCode, Codex, Claude Code, OpenAI): manda ordenes habladas y recibe el resumen de vuelta.",
   "main": "dist/index.js",
   "scripts": {
     "start": "tsx src/index.ts",
@@ -20,7 +20,8 @@
     "smoke": "tsx scripts/smoke-test.ts",
     "demo": "tsx scripts/demo.ts",
     "check:telegram": "tsx scripts/check-telegram.ts",
-    "check:devin": "tsx scripts/check-devin.ts",
+    "check:agent": "tsx scripts/check-agent.ts",
+    "check:devin": "tsx scripts/check-agent.ts",
     "setup:whisper": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-whisper.ps1"
   },
   "engines": {

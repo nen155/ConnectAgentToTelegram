@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import type { AppConfig } from './config';
+import type { AgentAdapter } from './agents/types';
 import { ffmpegVersion } from './audio/ffmpeg';
-import { runCommand, stripAnsi } from './util/process';
-import { devinEnv } from './devin/env';
 
 export interface Readiness {
   ok: boolean;
@@ -10,21 +9,12 @@ export interface Readiness {
   notes: string[];
 }
 
-async function tryRun(bin: string, args: string[]): Promise<string | null> {
-  try {
-    const result = await runCommand(bin, args, { timeoutMs: 20_000, env: devinEnv() });
-    if (result.code !== 0) return null;
-    return stripAnsi(result.stdout).trim();
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Comprueba las piezas externas (Devin CLI, whisper, ffmpeg, TTS) para poder
- * avisar por el propio chat en lugar de morir con un stack trace.
+ * Comprueba las piezas externas (CLI del agente, whisper, ffmpeg, TTS) para poder
+ * avisar por el propio chat en lugar de morir con un stack trace. La parte del agente
+ * la aporta su adaptador (`check`), asi que aqui no hay nada especifico de Devin.
  */
-export async function inspectReadiness(config: AppConfig): Promise<Readiness> {
+export async function inspectReadiness(config: AppConfig, agent: AgentAdapter): Promise<Readiness> {
   const problems: string[] = [];
   const notes: string[] = [];
 
@@ -35,17 +25,14 @@ export async function inspectReadiness(config: AppConfig): Promise<Readiness> {
     return { ok: problems.length === 0, problems, notes };
   }
 
-  const devinVersion = await tryRun(config.devin.bin, ['--version']);
-  if (!devinVersion) {
-    problems.push(
-      `No encuentro el CLI de Devin ("${config.devin.bin}"). Instalalo con: irm https://static.devin.ai/cli/setup.ps1 | iex`
-    );
-  } else {
-    notes.push(`Devin CLI: ${devinVersion.split('\n')[0]}`);
-    const auth = await tryRun(config.devin.bin, ['auth', 'status']);
-    if (!auth || /not logged in/i.test(auth)) {
-      problems.push('Devin CLI no tiene sesion iniciada. Ejecuta `devin auth login` en esta PC.');
-    }
+  if (agent.check) {
+    const check = await agent.check().catch((error: unknown) => ({
+      ok: false,
+      problems: [`No pude comprobar ${agent.label}: ${(error as Error).message}`],
+      notes: []
+    }));
+    problems.push(...check.problems);
+    notes.push(...check.notes);
   }
 
   if (!fs.existsSync(config.whisper.bin)) {

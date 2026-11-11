@@ -1,27 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CommandError, runCommand, stripAnsi, tail, type CommandOptions, type CommandResult } from '../util/process';
+import { CommandError, runCommand, stripAnsi, tail, type CommandOptions, type CommandResult } from '../../util/process';
 import { devinEnv } from './env';
+
+import type { AgentCli, AgentRunRequest, AgentRunResult } from '../types';
 
 export type CommandExecutor = (bin: string, args: string[], options?: CommandOptions) => Promise<CommandResult>;
 
-export interface DevinRunRequest {
-  prompt: string;
-  /** Sesion a reanudar. Tiene prioridad sobre `allowContinue`. */
-  sessionId?: string;
-  /** true si ya se ejecuto algo en este directorio y se puede usar --continue. */
-  allowContinue: boolean;
-  cwd: string;
-  timeoutMs: number;
-}
-
-export interface DevinRunResult {
-  text: string;
-  sessionId?: string;
-  durationMs: number;
-  exitCode: number;
-}
+export type DevinRunRequest = AgentRunRequest;
+export type DevinRunResult = AgentRunResult;
 
 export interface DevinRunnerOptions {
   bin: string;
@@ -124,7 +112,7 @@ export function friendlyDevinError(stderr: string, stdout: string): string | nul
   return null;
 }
 
-export class DevinRunner {
+export class DevinCli implements AgentCli {
   private authCheckedAt = 0;
   private authOk = false;
   private readonly exec: CommandExecutor;
@@ -153,7 +141,7 @@ export class DevinRunner {
     }
   }
 
-  async run(request: DevinRunRequest): Promise<DevinRunResult> {
+  async run(request: AgentRunRequest): Promise<AgentRunResult> {
     await this.ensureAuthenticated();
 
     const exportFile = path.join(this.options.tmpDir, `export-${randomUUID()}.json`);

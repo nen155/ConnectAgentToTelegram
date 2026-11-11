@@ -5,7 +5,9 @@ import { Bot, Context, InputFile } from 'grammy';
 import type { AppConfig } from '../config';
 import type { Logger } from '../logger';
 import type { CommandBridge, Notifier } from '../core/bridge';
-import type { SessionStore } from '../devin/sessionStore';
+import type { SessionStore } from '../core/sessionStore';
+import type { AgentAdapter } from '../agents/types';
+import { describeAgent } from '../config';
 import type { KeyedQueue } from '../core/taskQueue';
 import { runCommand, stripAnsi } from '../util/process';
 import { formatReadiness, inspectReadiness } from '../readiness';
@@ -47,12 +49,15 @@ export interface BotDeps {
   store: SessionStore;
   queue: KeyedQueue;
   logger: Logger;
+  /** Agente seleccionado (AGENT): etiqueta, estado y comprobaciones previas. */
+  agent: AgentAdapter;
   /** Proyecto asociado a cada mensaje enviado, para enrutar respuestas. */
   replyRoutes: ReplyRouteStore;
 }
 
-const HELP_TEXT = [
-  'Mandame una *nota de voz* o escribe tu orden y la ejecuto con Devin en la PC.',
+const helpText = (agentLabel: string): string =>
+  [
+  `Mandame una *nota de voz* o escribe tu orden y la ejecuto con ${agentLabel} en la PC.`,
   '',
   'Comandos:',
   '/new - empezar un hilo de conversacion nuevo',
@@ -109,7 +114,7 @@ async function downloadVoiceFile(
 }
 
 export function createTelegramBot(deps: BotDeps): Bot {
-  const { config, bridge, store, queue, logger, replyRoutes } = deps;
+  const { config, bridge, store, queue, logger, replyRoutes, agent } = deps;
   const bot = new Bot(config.telegram.token);
   const allowed = new Set(config.telegram.allowedUserIds);
 
@@ -137,27 +142,27 @@ export function createTelegramBot(deps: BotDeps): Bot {
     await next();
   });
 
-  bot.command('start', (ctx) => sendLongText(ctx, `Hola. ${HELP_TEXT}`));
-  bot.command('help', (ctx) => sendLongText(ctx, HELP_TEXT));
+  bot.command('start', (ctx) => sendLongText(ctx, `Hola. ${helpText(agent.label)}`));
+  bot.command('help', (ctx) => sendLongText(ctx, helpText(agent.label)));
 
   bot.command('new', async (ctx) => {
     const chatId = String(ctx.chat.id);
     await store.reset(chatId);
-    await ctx.reply('🆕 Hilo nuevo. La proxima orden arranca una sesion limpia de Devin.');
+    await ctx.reply(`🆕 Hilo nuevo. La proxima orden arranca una sesion limpia de ${agent.label}.`);
   });
 
   bot.command('status', async (ctx) => {
     const chatId = String(ctx.chat.id);
     const session = store.get(chatId);
-    const readiness = await inspectReadiness(config);
+    const readiness = await inspectReadiness(config, agent);
 
     const lines = [
-      `Carpeta de trabajo: ${config.devin.workdir}`,
-      `Permisos: ${config.devin.permissionMode}`,
+      `Agente: ${agent.label} (${describeAgent(config)})`,
+      `Carpeta de trabajo: ${config.agent.workdir}`,
       `Transcripcion: ${config.whisper.language} / ${path.basename(config.whisper.model)}`,
       `TTS: ${config.tts.enabled ? 'activado' : 'desactivado'}`,
       `Ordenes en cola: ${queue.pendingFor(chatId)}`,
-      `Sesion Devin: ${session?.sessionId ?? (session?.runs ? 'por --continue' : 'sin iniciar')}`,
+      `Sesion: ${session?.sessionId ?? (session?.runs ? 'por continuacion' : 'sin iniciar')}`,
       `Ordenes ejecutadas: ${session?.runs ?? 0}`,
       '',
       readiness.ok ? '✅ Todo listo' : '⚠️ Hay pendientes',

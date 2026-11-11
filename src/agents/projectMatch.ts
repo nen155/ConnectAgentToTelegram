@@ -1,8 +1,4 @@
-export interface DesktopWindow {
-  /** Nombre del proyecto tal y como aparece al principio del titulo de la ventana. */
-  project: string;
-  title: string;
-}
+import type { DesktopWindow } from './types';
 
 const STOP_WORDS = new Set([
   'de',

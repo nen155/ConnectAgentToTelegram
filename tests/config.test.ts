@@ -22,8 +22,8 @@ describe('loadConfig', () => {
   });
 
   it('mapea los alias yolo/bypass a dangerous', () => {
-    expect(loadConfig({ ...baseEnv, DEVIN_PERMISSION_MODE: 'yolo' }).devin.permissionMode).toBe('dangerous');
-    expect(loadConfig({ ...baseEnv, DEVIN_PERMISSION_MODE: 'bypass' }).devin.permissionMode).toBe('dangerous');
+    expect(loadConfig({ ...baseEnv, DEVIN_PERMISSION_MODE: 'yolo' }).agents.devin.permissionMode).toBe('dangerous');
+    expect(loadConfig({ ...baseEnv, DEVIN_PERMISSION_MODE: 'bypass' }).agents.devin.permissionMode).toBe('dangerous');
   });
 
   it('interpreta TTS_ENABLED de forma tolerante', () => {
@@ -41,7 +41,7 @@ describe('loadConfig', () => {
 
   it('usa rutas por defecto dentro del proyecto', () => {
     const config = loadConfig(baseEnv);
-    expect(config.devin.workdir).toBe(PROJECT_ROOT);
+    expect(config.agent.workdir).toBe(PROJECT_ROOT);
     expect(config.whisper.bin).toBe(path.join(PROJECT_ROOT, 'vendor', 'whisper', 'whisper-cli.exe'));
     expect(config.whisper.model).toBe(path.join(PROJECT_ROOT, 'vendor', 'models', 'ggml-small.bin'));
     expect(config.paths.sessionsFile).toBe(path.join(PROJECT_ROOT, 'data', 'sessions.json'));
@@ -53,7 +53,62 @@ describe('loadConfig', () => {
       DEVIN_WORKDIR: path.join(PROJECT_ROOT, 'sub'),
       DEVIN_EXTRA_ARGS: '--model opus  --verbose'
     });
-    expect(config.devin.workdir).toBe(path.join(PROJECT_ROOT, 'sub'));
-    expect(config.devin.extraArgs).toEqual(['--model', 'opus', '--verbose']);
+    expect(config.agent.workdir).toBe(path.join(PROJECT_ROOT, 'sub'));
+    expect(config.agents.devin.extraArgs).toEqual(['--model', 'opus', '--verbose']);
+  });
+
+  it('elige Devin por defecto y otro agente con AGENT', () => {
+    expect(loadConfig(baseEnv).agent.name).toBe('devin');
+    expect(loadConfig(baseEnv).agent.label).toBe('Devin');
+
+    const opencode = loadConfig({ ...baseEnv, AGENT: 'opencode' });
+    expect(opencode.agent.name).toBe('opencode');
+    expect(opencode.agent.label).toBe('OpenCode');
+    expect(opencode.agents.opencode.bin).toBe('opencode');
+  });
+
+  it('los nombres genericos mandan sobre los historicos DEVIN_*', () => {
+    const config = loadConfig({
+      ...baseEnv,
+      DEVIN_WORKDIR: path.join(PROJECT_ROOT, 'viejo'),
+      AGENT_WORKDIR: path.join(PROJECT_ROOT, 'nuevo'),
+      DEVIN_ROUTE: 'chat',
+      AGENT_ROUTE: 'desktop',
+      DEVIN_TIMEOUT_MS: '1000',
+      AGENT_TIMEOUT_MS: '2000'
+    });
+    expect(config.agent.workdir).toBe(path.join(PROJECT_ROOT, 'nuevo'));
+    expect(config.agent.route).toBe('desktop');
+    expect(config.agent.timeoutMs).toBe(2000);
+  });
+
+  it('sin AGENT_* sigue aceptando DEVIN_ROUTE y DEVIN_CONTINUITY', () => {
+    const config = loadConfig({ ...baseEnv, DEVIN_ROUTE: 'desktop', DEVIN_CONTINUITY: 'new' });
+    expect(config.agent.route).toBe('desktop');
+    expect(config.agent.continuity).toBe('new');
+  });
+
+  it('cada agente lee su propio bloque de configuracion', () => {
+    const config = loadConfig({
+      ...baseEnv,
+      AGENT: 'claude',
+      OPENCODE_MODEL: 'opencode/big-pickle',
+      OPENCODE_SKIP_PERMISSIONS: 'false',
+      CODEX_MODEL: 'gpt-5-codex',
+      CLAUDE_MODEL: 'claude-sonnet-4-6',
+      CLAUDE_PERMISSION_MODE: 'acceptEdits',
+      OPENAI_MODEL: 'gpt-4o-mini'
+    });
+
+    expect(config.agents.opencode.model).toBe('opencode/big-pickle');
+    expect(config.agents.opencode.skipPermissions).toBe(false);
+    expect(config.agents.codex.model).toBe('gpt-5-codex');
+    expect(config.agents.claude.model).toBe('claude-sonnet-4-6');
+    expect(config.agents.claude.permissionMode).toBe('acceptEdits');
+    expect(config.agents.openai.model).toBe('gpt-4o-mini');
+  });
+
+  it('rechaza un AGENT desconocido', () => {
+    expect(() => loadConfig({ ...baseEnv, AGENT: 'copilot' })).toThrow(/Configuracion invalida/);
   });
 });

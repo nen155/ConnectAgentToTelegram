@@ -1,5 +1,5 @@
 import type { Transcriber } from '../audio/whisper';
-import type { DevinRunRequest, DevinRunResult } from '../devin/devinRunner';
+import type { AgentCli, AgentRunRequest, AgentRunResult } from '../agents/types';
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -25,13 +25,13 @@ export class MockTranscriber implements Transcriber {
 }
 
 /**
- * Sustituto de DevinRunner que responde en ~2 s sin llamar a ningun modelo.
- * Sirve para probar el puente (Telegram, cola, TTS, bandeja) sin cuenta de Devin.
+ * Sustituto del CLI del agente que responde en ~2 s sin llamar a ningun modelo.
+ * Sirve para probar el puente (Telegram, cola, TTS, bandeja) sin cuenta de ningun agente.
  */
-export class MockDevinRunner {
+export class MockAgentRunner implements AgentCli {
   constructor(private readonly reply: string = MOCK_REPLY) {}
 
-  async run(request: DevinRunRequest): Promise<DevinRunResult> {
+  async run(request: AgentRunRequest): Promise<AgentRunResult> {
     await delay(2000);
     return {
       text: `${this.reply}\n\nOrden recibida: "${request.prompt}"`,
@@ -41,3 +41,6 @@ export class MockDevinRunner {
     };
   }
 }
+
+/** Nombre historico del mock, para no romper importaciones existentes. */
+export { MockAgentRunner as MockDevinRunner };

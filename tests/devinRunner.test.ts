@@ -1,13 +1,13 @@
 import {
   buildDevinArgs,
   cleanDevinOutput,
-  DevinRunner,
+  DevinCli,
   extractSessionId,
   extractSessionIdFromOutput,
   friendlyDevinError
-} from '../src/devin/devinRunner';
-import type { CommandExecutor } from '../src/devin/devinRunner';
-import { devinEnv, DEVIN_ENV_STRIP } from '../src/devin/env';
+} from '../src/agents/devin/cli';
+import type { CommandExecutor } from '../src/agents/devin/cli';
+import { devinEnv, DEVIN_ENV_STRIP } from '../src/agents/devin/env';
 
 const options = { permissionMode: 'dangerous', extraArgs: [] };
 
@@ -107,7 +107,7 @@ describe('friendlyDevinError', () => {
   });
 });
 
-describe('DevinRunner.run', () => {
+describe('DevinCli.run', () => {
   const baseOptions = {
     bin: 'devin',
     permissionMode: 'dangerous',
@@ -121,7 +121,7 @@ describe('DevinRunner.run', () => {
     const exec = jest.fn<ReturnType<CommandExecutor>, Parameters<CommandExecutor>>(async () =>
       ok('Not logged in.\n')
     );
-    const runner = new DevinRunner({ ...baseOptions, exec });
+    const runner = new DevinCli({ ...baseOptions, exec });
 
     await expect(
       runner.run({ prompt: 'hola', allowContinue: false, cwd: '.', timeoutMs: 1000 })
@@ -137,7 +137,7 @@ describe('DevinRunner.run', () => {
       .mockResolvedValueOnce(ok('Logged in as nen'))
       .mockResolvedValueOnce(ok('\u001B[32mHecho\u001B[0m\n\n\nfin'));
 
-    const runner = new DevinRunner({ ...baseOptions, exec });
+    const runner = new DevinCli({ ...baseOptions, exec });
     const result = await runner.run({ prompt: 'arregla', allowContinue: false, cwd: 'C:\p', timeoutMs: 5000 });
 
     expect(result.text).toBe('Hecho\n\nfin');
@@ -153,7 +153,7 @@ describe('DevinRunner.run', () => {
       .fn<ReturnType<CommandExecutor>, Parameters<CommandExecutor>>()
       .mockResolvedValue(ok('Logged in as nen'));
 
-    const runner = new DevinRunner({ ...baseOptions, exec });
+    const runner = new DevinCli({ ...baseOptions, exec });
     await runner.run({ prompt: 'uno', allowContinue: false, cwd: '.', timeoutMs: 5000 });
     await runner.run({ prompt: 'dos', allowContinue: false, cwd: '.', timeoutMs: 5000 });
 
@@ -167,7 +167,7 @@ describe('DevinRunner.run', () => {
       .mockResolvedValueOnce(ok('Logged in as nen'))
       .mockResolvedValueOnce({ stdout: '', stderr: '', code: -1, timedOut: true });
 
-    const runner = new DevinRunner({ ...baseOptions, exec });
+    const runner = new DevinCli({ ...baseOptions, exec });
 
     await expect(
       runner.run({ prompt: 'largo', allowContinue: false, cwd: '.', timeoutMs: 60_000 })

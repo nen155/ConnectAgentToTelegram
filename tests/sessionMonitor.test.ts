@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createLogger } from '../src/logger';
-import { formatFinishedSession, findProjectSession, readSessions, SessionMonitor, type SessionSnapshot } from '../src/core/sessionMonitor';
+import { formatFinishedSession, findProjectSession, SessionMonitor, type SessionSnapshot } from '../src/core/sessionMonitor';
+import { readSessions } from '../src/agents/devin/sessions';
 
 const logger = createLogger({ level: 'error' });
 

@@ -5,21 +5,58 @@ import type { AppConfig } from '../src/config';
 import { createLogger } from '../src/logger';
 import { CommandBridge, buildSummary, formatDuration, withLanguageInstruction, type Notifier } from '../src/core/bridge';
 import { KeyedQueue } from '../src/core/taskQueue';
-import { SessionStore } from '../src/devin/sessionStore';
+import { SessionStore } from '../src/core/sessionStore';
 
 function makeConfig(tmpDir: string): AppConfig {
   return {
     telegram: { token: 't', allowedUserIds: [1] },
-    devin: {
-      bin: 'devin',
+    agent: {
+      name: 'devin',
+      label: 'Devin',
       workdir: tmpDir,
-      permissionMode: 'dangerous',
+      projectName: 'mi-proyecto',
       timeoutMs: 1000,
       continuity: 'auto',
-      route: 'auto',
-      projectName: 'mi-proyecto',
-      extraArgs: [],
-      sessionsDb: path.join(tmpDir, 'sessions.db')
+      route: 'auto'
+    },
+    agents: {
+      devin: {
+        bin: 'devin',
+        permissionMode: 'dangerous',
+        extraArgs: [],
+        sessionsDb: path.join(tmpDir, 'sessions.db'),
+        windowSuffix: ' - Devin',
+        scripts: { desktop: 'desktop.ps1', terminal: 'terminal.ps1' }
+      },
+      opencode: {
+        bin: 'opencode',
+        skipPermissions: true,
+        extraArgs: [],
+        sessionsDb: path.join(tmpDir, 'opencode.db'),
+        windowSuffix: ' - Devin',
+        terminalPattern: 'opencode',
+        scripts: { desktop: 'desktop.ps1', terminal: 'terminal.ps1' }
+      },
+      codex: {
+        bin: 'codex',
+        fullAuto: true,
+        skipGitRepoCheck: true,
+        extraArgs: [],
+        sessionsDir: path.join(tmpDir, 'codex'),
+        windowSuffix: ' - Devin',
+        terminalPattern: 'codex',
+        scripts: { desktop: 'desktop.ps1', terminal: 'terminal.ps1' }
+      },
+      claude: {
+        bin: 'claude',
+        permissionMode: 'bypassPermissions',
+        extraArgs: [],
+        projectsDir: path.join(tmpDir, 'claude'),
+        windowSuffix: ' - Devin',
+        terminalPattern: 'claude',
+        scripts: { desktop: 'desktop.ps1', terminal: 'terminal.ps1' }
+      },
+      openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' }
     },
     whisper: { bin: 'w', model: 'm', language: 'es', threads: 1, timeoutMs: 1000 },
     tts: { enabled: true, rate: 0, maxChars: 500 },
@@ -30,7 +67,10 @@ function makeConfig(tmpDir: string): AppConfig {
       sessionsFile: path.join(tmpDir, 'sessions.json'),
       logFile: path.join(tmpDir, 'bridge.log'),
       ttsScript: 'script.ps1',
-      statusFile: path.join(tmpDir, 'status.json')
+      statusFile: path.join(tmpDir, 'status.json'),
+      replyRoutesFile: path.join(tmpDir, 'reply-routes.json'),
+      sendToDesktopScript: 'desktop.ps1',
+      sendToTerminalScript: 'terminal.ps1'
     },
     logLevel: 'error',
     summaryLanguage: '',
@@ -146,7 +186,7 @@ describe('CommandBridge', () => {
   it('no consulta al IDE si el enrutado esta en modo chat', async () => {
     const resolveIdeSession = jest.fn(async () => ({ id: 'x', title: 'x', busy: false }));
     const { bridge, config } = await setup({ resolveIdeSession });
-    config.devin.route = 'chat';
+    config.agent.route = 'chat';
     const notifier = makeNotifier();
 
     await bridge.handlePrompt('42', 'hola', notifier);
@@ -160,14 +200,14 @@ describe('CommandBridge', () => {
       listWindows: jest.fn(async () => [{ project: 'mi-proyecto', title: 'mi-proyecto - Devin' }])
     };
     const { bridge, run, config } = await setup({ desktop });
-    config.devin.route = 'desktop';
+    config.agent.route = 'desktop';
     const notifier = makeNotifier();
 
     await bridge.handlePrompt('42', 'arregla el login', notifier);
 
     expect(desktop.send).toHaveBeenCalledWith('arregla el login', 'mi-proyecto');
     expect(run).not.toHaveBeenCalled();
-    expect(notifier.texts.join(' ')).toContain('enviada a la ventana');
+    expect(notifier.texts.join(' ')).toContain('Orden enviada a Devin');
   });
 
   it('enruta al proyecto que se nombra en la orden', async () => {
@@ -179,7 +219,7 @@ describe('CommandBridge', () => {
       ])
     };
     const { bridge, config } = await setup({ desktop });
-    config.devin.route = 'desktop';
+    config.agent.route = 'desktop';
     const notifier = makeNotifier();
 
     await bridge.handlePrompt('42', 'en Silver, continua con lo pendiente', notifier);
@@ -197,7 +237,7 @@ describe('CommandBridge', () => {
       desktop,
       knownProjects: async () => ['Silver Utilizar Silver CD 2 ISO', 'mi-proyecto']
     });
-    config.devin.route = 'desktop';
+    config.agent.route = 'desktop';
     const notifier = makeNotifier();
 
     await bridge.handlePrompt('42', 'en Silver continua', notifier);
@@ -213,13 +253,13 @@ describe('CommandBridge', () => {
       listWindows: jest.fn(async () => [{ project: 'mi-proyecto', title: 'mi-proyecto - Devin' }])
     };
     const { bridge, run, config } = await setup({ desktop });
-    config.devin.route = 'desktop';
+    config.agent.route = 'desktop';
     const notifier = makeNotifier();
 
     await bridge.handlePrompt('42', 'arregla el login', notifier);
 
     expect(run).toHaveBeenCalled();
-    expect(notifier.texts.join(' ')).toContain('No pude escribir en la ventana');
+    expect(notifier.texts.join(' ')).toContain('No pude escribir en Devin');
   });
 
   it('no encola en la ventana si la sesion del IDE esta trabajando', async () => {
@@ -231,13 +271,13 @@ describe('CommandBridge', () => {
       listWindows: jest.fn(async () => [{ project: 'mi-proyecto', title: 'mi-proyecto - Devin' }])
     };
     const { bridge, run, config } = await setup({ desktop });
-    config.devin.route = 'desktop';
+    config.agent.route = 'desktop';
     const notifier = makeNotifier();
 
     await bridge.handlePrompt('42', 'arregla el login', notifier);
 
     expect(run).toHaveBeenCalled();
-    expect(notifier.texts.join(' ')).toContain('esta trabajando y no la pongo en cola');
+    expect(notifier.texts.join(' ')).toContain('y no la pongo en cola');
   });
 
   it('responde con el error sin romper el proceso', async () => {
@@ -405,7 +445,7 @@ describe('prioridad de enrutado', () => {
       ])
     };
     const { bridge, config } = await setup({ desktop });
-    config.devin.route = 'desktop';
+    config.agent.route = 'desktop';
     const notifier = makeNotifier();
 
     await bridge.handlePrompt('42', 'en Silver continua', notifier, { project: 'MilioLab' });
@@ -419,7 +459,7 @@ describe('prioridad de enrutado', () => {
       listWindows: jest.fn(async () => [{ project: 'Silver Utilizar Silver CD 2 ISO', title: 'a' }])
     };
     const { bridge, config } = await setup({ desktop });
-    config.devin.route = 'desktop';
+    config.agent.route = 'desktop';
     const notifier = makeNotifier();
 
     await bridge.handlePrompt('42', 'en Silver continua', notifier);

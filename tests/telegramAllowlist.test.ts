@@ -1,7 +1,7 @@
 import type { AppConfig } from '../src/config';
 import type { CommandBridge } from '../src/core/bridge';
 import { KeyedQueue } from '../src/core/taskQueue';
-import { SessionStore } from '../src/devin/sessionStore';
+import { SessionStore } from '../src/core/sessionStore';
 import { createLogger } from '../src/logger';
 import { ReplyRouteStore } from '../src/telegram/replyRoutes';
 import { createTelegramBot } from '../src/telegram/bot';
