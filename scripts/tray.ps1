@@ -169,6 +169,48 @@ function Get-TaskStateColor([string]$State) {
     }
 }
 
+# Procesos de Devin vivos en la maquina. Se descartan los subprocesos de Chromium del IDE
+# (--type=renderer, --type=gpu-process, --require=...), que inundarian la lista sin aportar nada.
+function Get-DevinProcesses {
+    try {
+        $procs = Get-CimInstance Win32_Process -Filter "Name='devin.exe'" -ErrorAction Stop
+    } catch {
+        return @()
+    }
+
+    $result = @()
+    foreach ($proc in $procs) {
+        $path = $proc.ExecutablePath
+        $cmd = $proc.CommandLine
+        if (-not $path) { continue }
+
+        $kind = $null
+        if ($path -like '*\devin\cli\bin\devin.exe') {
+            $kind = 'Devin CLI'
+        } elseif ($path -like '*\Programs\Devin\Devin.exe') {
+            # Solo el proceso principal del IDE: sin argumentos ni subprocesos auxiliares.
+            $trimmed = $cmd.Trim()
+            $quoted = '"' + $path + '"'
+            if ($trimmed -ne $quoted -and $trimmed -ne $path) { continue }
+            $kind = 'Devin Desktop'
+        } else {
+            continue
+        }
+
+        $startMs = 0
+        if ($proc.CreationDate) {
+            $startMs = ([DateTimeOffset]$proc.CreationDate).ToUnixTimeMilliseconds()
+        }
+        $result += [pscustomobject]@{
+            Pid = $proc.ProcessId
+            Kind = $kind
+            Command = $cmd
+            StartMs = $startMs
+        }
+    }
+    return $result
+}
+
 function New-DotIcon([System.Drawing.Color]$Color) {
     $bitmap = New-Object System.Drawing.Bitmap 16, 16
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
@@ -422,10 +464,12 @@ function Show-Dashboard {
     [void]$list.Columns.Add('Estado', 110)
     [void]$list.Columns.Add('Tiempo', 90)
     [void]$list.Columns.Add('Sesion', 120)
-    $groupActive = New-Object System.Windows.Forms.ListViewGroup 'En curso'
-    $groupRecent = New-Object System.Windows.Forms.ListViewGroup 'Recientes'
+    $groupActive = New-Object System.Windows.Forms.ListViewGroup 'Ordenes del puente en curso'
+    $groupRecent = New-Object System.Windows.Forms.ListViewGroup 'Ordenes recientes del puente'
+    $groupProcs = New-Object System.Windows.Forms.ListViewGroup 'Procesos de Devin en el sistema (CLI y escritorio)'
     [void]$list.Groups.Add($groupActive)
     [void]$list.Groups.Add($groupRecent)
+    [void]$list.Groups.Add($groupProcs)
     $form.Controls.Add($list)
 
     $buttons = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -464,6 +508,13 @@ function Show-Dashboard {
     $closeButton.Height = 30
     [void]$buttons.Controls.Add($closeButton)
 
+    $autostartCheck = New-Object System.Windows.Forms.CheckBox
+    $autostartCheck.Text = 'Iniciar con Windows'
+    $autostartCheck.Width = 160
+    $autostartCheck.Height = 30
+    $autostartCheck.Padding = New-Object System.Windows.Forms.Padding 12, 6, 0, 0
+    [void]$buttons.Controls.Add($autostartCheck)
+
     # Los controles van a ambito de script: los scriptblocks de eventos y del timer
     # no capturan variables locales de esta funcion (PowerShell no cierra sobre el scope).
     $script:dashForm = $form
@@ -471,8 +522,10 @@ function Show-Dashboard {
     $script:dashList = $list
     $script:dashGroupActive = $groupActive
     $script:dashGroupRecent = $groupRecent
+    $script:dashGroupProcs = $groupProcs
     $script:dashStopButton = $stopButton
     $script:dashRestartButton = $restartButton
+    $script:dashAutostart = $autostartCheck
 
     $script:dashRefresh = {
         try {
@@ -535,7 +588,29 @@ function Show-Dashboard {
                 [void]$listView.Items.Add($item)
             }
 
+            $devinProcs = Get-DevinProcesses
+            if ($devinProcs.Count -eq 0) {
+                $emptyProcs = New-Object System.Windows.Forms.ListViewItem 'No hay procesos de Devin en ejecucion'
+                $emptyProcs.Group = $script:dashGroupProcs
+                $emptyProcs.ForeColor = [System.Drawing.Color]::Gray
+                [void]$listView.Items.Add($emptyProcs)
+            }
+
+            foreach ($proc in $devinProcs) {
+                $label = $proc.Command
+                if (-not $label) { $label = $proc.Kind }
+                $item = New-Object System.Windows.Forms.ListViewItem((Limit-Text $label 160))
+                [void]$item.SubItems.Add($proc.Kind)
+                [void]$item.SubItems.Add((Format-Elapsed $proc.StartMs))
+                [void]$item.SubItems.Add("PID $($proc.Pid)")
+                $item.Group = $script:dashGroupProcs
+                $item.ForeColor = [System.Drawing.Color]::FromArgb(52, 73, 94)
+                [void]$listView.Items.Add($item)
+            }
+
             $listView.EndUpdate()
+
+            $script:dashAutostart.Checked = Test-Path $startupLnk
 
             $running = [bool]$bridgePid
             $script:dashStopButton.Enabled = $running
@@ -553,6 +628,16 @@ function Show-Dashboard {
 
     $refreshButton.add_Click($script:dashRefresh)
     $closeButton.add_Click({ $script:dashForm.Close() })
+    $autostartCheck.add_Click({
+        try {
+            if (Test-Path $startupLnk) { Uninstall-Autostart } else { Install-Autostart }
+            $script:dashAutostart.Checked = Test-Path $startupLnk
+            Update-Ui
+        } catch {
+            Write-TrayLog ("Error con el inicio automatico: " + $_)
+            $script:dashAutostart.Checked = Test-Path $startupLnk
+        }
+    })
     $logButton.add_Click({
         if (Test-Path $bridgeLog) { Start-Process notepad.exe $bridgeLog }
     })

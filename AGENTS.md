@@ -73,6 +73,11 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
 - PowerShell 5.1 no tiene operador ternario (`? :`): usar if/else.
 - El historial de tareas (`TaskRegistry`) es en memoria; `data/status.json` es la unica interfaz con la
   bandeja (fase actual + `active` + `recent`).
+- El panel lista tambien procesos reales (`Get-DevinProcesses`): solo el **proceso principal** de
+  `...\Programs\Devin\Devin.exe` y los `...\devin\cli\bin\devin.exe`. Los subprocesos de Chromium del
+  IDE (`--type=renderer`, `--type=gpu-process`, `--require=...`) se descartan: sin ese filtro salen
+  mas de 30 filas de ruido. Las sesiones de Devin Desktop y Cloud **no** son procesos locales, asi
+  que no aparecen ahi.
 - `data/` y `vendor/` estan en `.gitignore`; el modelo `small` pesa ~465 MB.
 
 ## Convenciones del proyecto
