@@ -1,0 +1,42 @@
+{
+  "name": "connect-agent-to-telegram",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Puente de voz entre Telegram y Devin CLI: manda ordenes habladas y recibe el resumen de vuelta.",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "tray": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tray.ps1",
+    "tray:start": "wscript scripts/tray.vbs",
+    "tray:dashboard": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tray.ps1 -ShowDashboard",
+    "tray:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tray.ps1 -Install",
+    "tray:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tray.ps1 -Uninstall",
+    "tray:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tray.ps1 -SelfTest",
+    "tray:lint": "powershell -NoProfile -Command \"$e=$null; $null=[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'scripts/tray.ps1').Path,[ref]$null,[ref]$e); if ($e) { $e | % { $_.Extent.StartLineNumber.ToString() + ': ' + $_.Message }; exit 1 } else { 'sintaxis OK' }\"",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest --passWithNoTests",
+    "smoke": "tsx scripts/smoke-test.ts",
+    "demo": "tsx scripts/demo.ts",
+    "check:telegram": "tsx scripts/check-telegram.ts",
+    "check:devin": "tsx scripts/check-devin.ts",
+    "setup:whisper": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-whisper.ps1"
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "grammy": "^1.46.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.6.6",
+    "jest": "^30.5.2",
+    "ts-jest": "^29.4.15",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
