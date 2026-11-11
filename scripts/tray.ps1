@@ -128,9 +128,12 @@ function Get-ActivityText {
     $suffix = ''
     if ($elapsed) { $suffix = " ($elapsed)" }
 
+    $prefix = 'Devin trabajando'
+    if ($current.source -eq 'external') { $prefix = 'Otra sesion de Devin' }
+
     switch ($current.state) {
         'replying' { return "Enviando respuesta$suffix" }
-        default { return "Devin trabajando$suffix`: $(Limit-Text $current.prompt 45)" }
+        default { return "$prefix$suffix`: $(Limit-Text $current.prompt 45)" }
     }
 }
 
@@ -464,8 +467,8 @@ function Show-Dashboard {
     [void]$list.Columns.Add('Estado', 110)
     [void]$list.Columns.Add('Tiempo', 90)
     [void]$list.Columns.Add('Sesion', 120)
-    $groupActive = New-Object System.Windows.Forms.ListViewGroup 'Ordenes del puente en curso'
-    $groupRecent = New-Object System.Windows.Forms.ListViewGroup 'Ordenes recientes del puente'
+    $groupActive = New-Object System.Windows.Forms.ListViewGroup 'Tareas en curso'
+    $groupRecent = New-Object System.Windows.Forms.ListViewGroup 'Tareas recientes'
     $groupProcs = New-Object System.Windows.Forms.ListViewGroup 'Procesos de Devin en el sistema (CLI y escritorio)'
     [void]$list.Groups.Add($groupActive)
     [void]$list.Groups.Add($groupRecent)
@@ -559,7 +562,9 @@ function Show-Dashboard {
 
             foreach ($task in $activeTasks) {
                 $item = New-Object System.Windows.Forms.ListViewItem((Limit-Text $task.prompt 160))
-                [void]$item.SubItems.Add((Get-TaskStateLabel $task.state))
+                $stateLabel = Get-TaskStateLabel $task.state
+                if ($task.source -eq 'external') { $stateLabel = "Otra sesion - $stateLabel" }
+                [void]$item.SubItems.Add($stateLabel)
                 $elapsed = Format-Elapsed $task.startedAt
                 if (-not $elapsed) { $elapsed = '-' }
                 [void]$item.SubItems.Add($elapsed)
@@ -580,7 +585,9 @@ function Show-Dashboard {
                 $label = Limit-Text $task.prompt 160
                 if ($task.error) { $label = $label + ' -> ' + (Limit-Text $task.error 60) }
                 $item = New-Object System.Windows.Forms.ListViewItem($label)
-                [void]$item.SubItems.Add((Get-TaskStateLabel $task.state))
+                $stateLabel = Get-TaskStateLabel $task.state
+                if ($task.source -eq 'external') { $stateLabel = "Otra sesion - $stateLabel" }
+                [void]$item.SubItems.Add($stateLabel)
                 [void]$item.SubItems.Add((Format-Duration $task.durationMs))
                 if ($task.sessionId) { [void]$item.SubItems.Add($task.sessionId) } else { [void]$item.SubItems.Add('-') }
                 $item.Group = $script:dashGroupRecent

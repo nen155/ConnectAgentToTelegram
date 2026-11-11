@@ -16,7 +16,8 @@ function makeConfig(tmpDir: string): AppConfig {
       permissionMode: 'dangerous',
       timeoutMs: 1000,
       continuity: 'auto',
-      extraArgs: []
+      extraArgs: [],
+      sessionsDb: path.join(tmpDir, 'sessions.db')
     },
     whisper: { bin: 'w', model: 'm', language: 'es', threads: 1, timeoutMs: 1000 },
     tts: { enabled: true, rate: 0, maxChars: 500 },

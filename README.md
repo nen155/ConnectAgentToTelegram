@@ -22,6 +22,8 @@ llega al modelo, igual que si la escribieras en la terminal.
 - **Respuesta en audio** con las voces de Windows (System.Speech) y conversión a OGG/Opus.
 - **Hilo de conversación por chat**: cada chat mantiene su sesión del agente (`--resume`).
 - **Cola por chat**: si mandas varias órdenes seguidas, se ejecutan en orden y te avisa de la posición.
+- **Aviso de tareas externas**: si lanzas un agente de Devin CLI por tu cuenta (en otra terminal), el
+  puente lo detecta y te avisa por Telegram al terminar, **con el resumen de lo que hizo**.
 - **Bandeja del sistema**: icono con estado, panel de actividad (doble clic) y control de
   iniciar / detener / reiniciar. Arranque automático con Windows.
 - **Instancia única**: dos procesos con el mismo token provocarían `409 Conflict` en Telegram.
@@ -115,6 +117,24 @@ entre sí.
 
 Al terminar, el resumen cierra con `🟢 Esperando nuevas ordenes.` o `⏳ Quedan N orden(es) en cola.`
 
+### Avisos de tareas lanzadas fuera del puente
+
+El puente vigila cada 5 s los procesos del CLI de Devin (`devin.exe`) que no ha lanzado él. Cuando
+uno termina, te manda un mensaje con la duración, la orden y **el resumen que produjo**, leído de la
+base de sesiones del CLI:
+
+```
+✅ Tarea de Devin terminada (otra sesion, no lanzada desde Telegram)
+Duracion: 41s
+Orden: "Cuenta cuantas secciones tiene el README..."
+
+Resumen de lo que hizo:
+El README tiene 14 lineas que empiezan por ## (13 secciones de nivel 2 ...)
+```
+
+Las órdenes que lanza el propio bot no generan este aviso: ya tienen su resumen normal. Si no se
+puede leer la base de sesiones, el aviso llega igualmente, indicando que no hubo resumen.
+
 ## Bandeja del sistema (Windows)
 
 ```powershell
@@ -125,8 +145,12 @@ npm run tray:start     # lanza la bandeja ahora, sin ventana de consola
 Icono **verde** en ejecución, **rojo** detenido. Al pasar el ratón muestra qué está haciendo el
 agente y cuánto lleva. **Doble clic** abre el panel de actividad:
 
-- **En curso**: cada orden con su estado (`Trabajando`, `En cola`, `Respondiendo`), tiempo y sesión.
-- **Recientes**: últimas 8 con duración, sesión y el error si falló.
+- **Tareas en curso**: cada orden con su estado (`Trabajando`, `En cola`, `Respondiendo`), tiempo y
+  sesión. Las que no lanzó el bot aparecen como `Otra sesion - Trabajando`.
+- **Tareas recientes**: últimas 8 con duración, sesión y el error si falló.
+- **Procesos de Devin en el sistema**: los `devin.exe` del CLI y el proceso principal del IDE, con PID
+  y tiempo en marcha.
+- Casilla **Iniciar con Windows** para activar o quitar el arranque automático sin salir del panel.
 - Botones para actualizar, reiniciar o detener el puente y abrir el log.
 
 Otros comandos:
@@ -155,6 +179,7 @@ Todo se ajusta en `.env` (ver `.env.example`). Lo importante:
 | `DEVIN_CONTINUITY` | `auto` | `auto` (reanuda), `new` (sin memoria), `continue` |
 | `DEVIN_TIMEOUT_MS` | 20 min | Corte de seguridad por orden |
 | `DEVIN_MODEL` | el del CLI | Alias o nombre de modelo |
+| `DEVIN_SESSIONS_DB` | `%APPDATA%\devin\cli\sessions.db` | Base de sesiones para resumir tareas externas |
 | `WHISPER_LANG` | `es` | Idioma de transcripción |
 | `WHISPER_THREADS` | núcleos de la máquina | Hilos de CPU para whisper |
 | `TTS_ENABLED` / `TTS_VOICE` | `true` / voz del sistema | Nota de voz de respuesta |
@@ -208,7 +233,7 @@ tests/                  pruebas unitarias (jest + ts-jest)
 ```bash
 npm run dev         # recarga al guardar
 npm run typecheck   # tsc --noEmit
-npm test            # 81 pruebas
+npm test            # 101 pruebas
 npm run demo        # pipeline completo con mocks
 npm run smoke       # pipeline de audio real (requiere whisper + ffmpeg)
 ```
@@ -239,6 +264,9 @@ Los logs están en `data/logs/bridge.log` y `data/logs/tray.log`.
   (`transcribeMs`, `devinMs`, `ttsMs`) en el log.
 - **WhatsApp no implementado**: el núcleo (`src/core/bridge.ts`) recibe un `Notifier`, no conoce
   Telegram; añadir otro canal es escribir un adaptador.
+- **Solo se ven agentes CLI**: las sesiones de Devin Desktop y Devin Cloud no son procesos locales, así
+  que no aparecen en el panel ni generan avisos. El resumen de una tarea externa se lee de la base de
+  sesiones del CLI (`node:sqlite`, aún experimental en Node).
 - **TTS y bandeja son de Windows**: en Linux/macOS el bot funciona, pero sin voz de vuelta ni icono.
 
 ## Licencia

@@ -17,7 +17,7 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
 | `npm run tray:lint` | valida la sintaxis de `scripts/tray.ps1` |
 | `npm run tray:install` / `tray:uninstall` | alta/baja del arranque con Windows |
 | `npm run typecheck` | `tsc --noEmit` (obligatorio antes de dar algo por terminado) |
-| `npm test` | jest + ts-jest (81 pruebas) |
+| `npm test` | jest + ts-jest (101 pruebas) |
 | `npm run smoke` | pipeline de audio real: TTS -> OGG/Opus -> whisper.cpp -> texto |
 | `npm run check:telegram` | valida el token del bot y avisa si hay webhook (incompatible con long polling) |
 | `npm run check:devin` | ejecuta una orden real por el mismo runner que usa el bot |
@@ -79,6 +79,13 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
   mas de 30 filas de ruido. Las sesiones de Devin Desktop y Cloud **no** son procesos locales, asi
   que no aparecen ahi.
 - `data/` y `vendor/` estan en `.gitignore`; el modelo `small` pesa ~465 MB.
+- **Base de sesiones del CLI** (`%APPDATA%\devin\cli\sessions.db`): tablas `sessions`
+  (`id`, `working_directory`, `created_at` y `last_activity_at` en **segundos**, `title`) y
+  `message_nodes` (`session_id`, `chat_message` con JSON `{role, content}`). Se lee con `node:sqlite`
+  (experimental, funciona sin flag en Node 22) para resumir tareas externas. `devin.exe` lanza un
+  proceso hijo que tambien coincide con el filtro: se descarta por relacion padre-hijo o la tarea
+  se contaria dos veces.
+- Las sesiones de Devin Desktop y Cloud no son procesos locales: no aparecen ni generan avisos.
 
 ## Convenciones del proyecto
 

@@ -9,11 +9,20 @@ import type { DevinRunner } from '../devin/devinRunner';
 import type { SessionStore } from '../devin/sessionStore';
 import type { KeyedQueue } from './taskQueue';
 import type { BridgeState, StatusPublisher } from './statusPublisher';
-import { TaskRegistry } from './taskRegistry';
+import { TaskRegistry, type TaskRecord } from './taskRegistry';
+import { formatDuration } from '../util/format';
+
+export { formatDuration };
 
 export interface Notifier {
   text(message: string): Promise<void>;
   voice(filePath: string): Promise<void>;
+}
+
+/** Tareas detectadas fuera del puente (agentes de Devin CLI lanzados a mano). */
+export interface ExternalTasksProvider {
+  active(): TaskRecord[];
+  recent(): TaskRecord[];
 }
 
 export interface BridgeDeps {
@@ -25,17 +34,10 @@ export interface BridgeDeps {
   config: AppConfig;
   logger: Logger;
   status?: Pick<StatusPublisher, 'publish'>;
+  external?: ExternalTasksProvider;
 }
 
 /** Formatea duraciones cortas para el resumen. */
-export function formatDuration(ms: number): string {
-  const totalSeconds = Math.round(ms / 1000);
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
-}
-
 export function buildSummary(text: string, durationMs: number, pending = 0): string {
   const body = text.trim() || 'Termine la tarea, pero no produje texto de resumen.';
   const tail =
@@ -84,6 +86,11 @@ export class CommandBridge {
 
   async handlePrompt(chatId: string, prompt: string, notifier: Notifier): Promise<void> {
     await this.runOrder(chatId, prompt, notifier);
+  }
+
+  /** Republica el estado (lo usa el vigilante de agentes externos al detectar cambios). */
+  async refreshStatus(): Promise<void> {
+    await this.publishStatus();
   }
 
   private async runOrder(
@@ -170,17 +177,28 @@ export class CommandBridge {
     if (active.some((task) => task.state === 'working')) return 'working';
     if (active.some((task) => task.state === 'replying')) return 'replying';
     if (active.length > 0) return 'working';
+    if ((this.deps.external?.active() ?? []).length > 0) return 'working';
     return 'idle';
   }
 
   private async publishStatus(state?: BridgeState): Promise<void> {
     const { active, recent } = this.registry.snapshot();
+    const externalActive = this.deps.external?.active() ?? [];
+    const externalRecent = this.deps.external?.recent() ?? [];
+
+    const allActive = [...externalActive, ...active];
+    const allRecent = [...recent, ...externalRecent]
+      .sort((a, b) => (b.finishedAt ?? b.queuedAt) - (a.finishedAt ?? a.queuedAt))
+      .slice(0, 8);
+
     const current =
-      active.find((task) => task.state === 'working') ?? active.find((task) => task.state === 'replying');
+      active.find((task) => task.state === 'working') ??
+      active.find((task) => task.state === 'replying') ??
+      externalActive[0];
 
     await this.deps.status?.publish(state ?? this.computeState(), {
-      active,
-      recent,
+      active: allActive,
+      recent: allRecent,
       current,
       queue: active.filter((task) => task.state === 'queued').length
     });

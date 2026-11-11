@@ -14,6 +14,8 @@ export interface TaskRecord {
   sessionId?: string;
   exitCode?: number;
   error?: string;
+  /** 'bridge' si la orden llego por Telegram; 'external' si la detecto el vigilante de procesos. */
+  source?: 'bridge' | 'external';
 }
 
 export type TaskSnapshot = TaskRecord;
@@ -34,7 +36,8 @@ export class TaskRegistry {
       chatId: input.chatId,
       prompt: input.prompt,
       state: 'queued',
-      queuedAt: Date.now()
+      queuedAt: Date.now(),
+      source: 'bridge'
     };
     this.tasks.set(record.id, record);
     this.prune();

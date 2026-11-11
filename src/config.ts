@@ -31,6 +31,7 @@ const schema = z.object({
   DEVIN_TIMEOUT_MS: z.coerce.number().int().positive().default(20 * 60 * 1000),
   DEVIN_CONTINUITY: z.enum(['auto', 'new', 'continue']).default('auto'),
   DEVIN_EXTRA_ARGS: z.string().default(''),
+  DEVIN_SESSIONS_DB: z.string().trim().optional(),
 
   FFMPEG_BIN: z.string().trim().default('ffmpeg'),
   WHISPER_BIN: z.string().trim().optional(),
@@ -63,6 +64,8 @@ export interface AppConfig {
     timeoutMs: number;
     continuity: 'auto' | 'new' | 'continue';
     extraArgs: string[];
+    /** Base de sesiones del CLI, para resumir tareas lanzadas fuera del puente. */
+    sessionsDb: string;
   };
   whisper: { bin: string; model: string; language: string; threads: number; timeoutMs: number };
   tts: { enabled: boolean; voice?: string; rate: number; maxChars: number };
@@ -111,7 +114,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       model: values.DEVIN_MODEL,
       timeoutMs: values.DEVIN_TIMEOUT_MS,
       continuity: values.DEVIN_CONTINUITY,
-      extraArgs: values.DEVIN_EXTRA_ARGS.split(' ').map((arg) => arg.trim()).filter(Boolean)
+      extraArgs: values.DEVIN_EXTRA_ARGS.split(' ').map((arg) => arg.trim()).filter(Boolean),
+      sessionsDb: path.resolve(
+        values.DEVIN_SESSIONS_DB ?? path.join(process.env.APPDATA ?? '', 'devin', 'cli', 'sessions.db')
+      )
     },
     whisper: {
       bin: path.resolve(values.WHISPER_BIN ?? path.join(vendorDir, 'whisper', 'whisper-cli.exe')),
