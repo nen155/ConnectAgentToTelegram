@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { loadConfig } from './config';
+import { loadConfig, PROJECT_ROOT } from './config';
 import { createLogger } from './logger';
 import { KeyedQueue } from './core/taskQueue';
 import { CommandBridge } from './core/bridge';
@@ -14,6 +14,7 @@ import {
 import { StatusPublisher } from './core/statusPublisher';
 import { acquireLock, releaseLock } from './core/singleInstance';
 import { SessionStore } from './devin/sessionStore';
+import { DesktopRouter } from './devin/desktopRouter';
 import { DevinRunner } from './devin/devinRunner';
 import { WhisperCppTranscriber } from './audio/whisper';
 import { WindowsSapiTts } from './audio/tts';
@@ -129,6 +130,11 @@ async function main(): Promise<void> {
     logger,
     status,
     sessions: () => monitor.sessions(),
+    desktop: new DesktopRouter({
+      scriptPath: path.join(PROJECT_ROOT, 'scripts', 'send-to-desktop.ps1'),
+      tmpDir: config.paths.tmp,
+      projectName: config.devin.projectName
+    }),
     resolveIdeSession: async () => {
       const sessions = readSessions(config.devin.sessionsDb, { limit: 20, withinMs: 24 * 60 * 60 * 1000 });
       const ownSessions = new Set(

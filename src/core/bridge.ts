@@ -7,6 +7,7 @@ import type { Transcriber } from '../audio/whisper';
 import type { TextToSpeech } from '../audio/tts';
 import type { DevinRunner } from '../devin/devinRunner';
 import type { SessionStore } from '../devin/sessionStore';
+import type { DesktopRouter } from '../devin/desktopRouter';
 import type { KeyedQueue } from './taskQueue';
 import type { BridgeState, StatusPublisher } from './statusPublisher';
 import { TaskRegistry, type TaskRecord } from './taskRegistry';
@@ -41,6 +42,8 @@ export interface BridgeDeps {
   sessions?: () => SessionSnapshot[];
   /** Resuelve la sesion del IDE para el proyecto configurado, si existe. */
   resolveIdeSession?: () => Promise<IdeSessionRoute | null>;
+  /** Escribe la orden en la ventana del IDE (DEVIN_ROUTE=desktop). */
+  desktop?: Pick<DesktopRouter, 'send'>;
 }
 
 /** Formatea duraciones cortas para el resumen. */
@@ -107,6 +110,29 @@ export class CommandBridge {
     transcribeMs?: number
   ): Promise<void> {
     const { queue, config, logger } = this.deps;
+    let note: string | undefined;
+
+    // Enrutado al IDE: se escribe la orden en el compositor de su ventana.
+    if (config.devin.route === 'desktop' && this.deps.desktop) {
+      const attempt = await this.deps.desktop.send(prompt);
+      if (attempt.sent) {
+        const task = this.registry.create({ chatId, prompt });
+        const now = Date.now();
+        this.registry.update(task.id, { state: 'done', startedAt: now, finishedAt: now, durationMs: 0 });
+        await this.publishStatus();
+
+        await notifier.text(
+          `📨 Orden enviada a la ventana de Devin Desktop "${config.devin.projectName}".\n` +
+            'Te aviso con el resumen cuando termine: lo detecta el monitor de sesiones.'
+        );
+        logger.info('Orden enviada al IDE', { chatId, project: config.devin.projectName });
+        return;
+      }
+
+      note = `⚠️ No pude escribir en la ventana del IDE (${attempt.reason ?? 'sin acceso'}); la ejecuto en el CLI.`;
+      logger.warn('No se pudo enviar al IDE', { reason: attempt.reason });
+    }
+
     const queued = queue.pendingFor(chatId);
     if (queued > 0) {
       await notifier.text(`⏳ Hay ${queued} orden(es) en curso. La tuya va despues.`);
@@ -125,7 +151,6 @@ export class CommandBridge {
         const session = this.deps.store.get(chatId);
         const continuity = config.devin.continuity;
         let sessionId = continuity === 'new' ? undefined : session?.sessionId;
-        let note: string | undefined;
 
         // Enrutado: si el proyecto esta abierto en el IDE, la orden continua esa conversacion.
         if (config.devin.route === 'auto' && this.deps.resolveIdeSession) {

@@ -17,6 +17,7 @@ function makeConfig(tmpDir: string): AppConfig {
       timeoutMs: 1000,
       continuity: 'auto',
       route: 'auto',
+      projectName: 'mi-proyecto',
       extraArgs: [],
       sessionsDb: path.join(tmpDir, 'sessions.db')
     },
@@ -57,6 +58,7 @@ async function setup(
     synthesize?: jest.Mock;
     transcribe?: jest.Mock;
     resolveIdeSession?: () => Promise<{ id: string; title: string; busy: boolean } | null>;
+    desktop?: { send: (prompt: string) => Promise<{ sent: boolean; reason?: string }> };
   } = {}
 ) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bridge-'));
@@ -80,7 +82,8 @@ async function setup(
     config,
     logger: createLogger({ level: 'error' }),
     status: { publish },
-    ...(overrides.resolveIdeSession ? { resolveIdeSession: overrides.resolveIdeSession } : {})
+    ...(overrides.resolveIdeSession ? { resolveIdeSession: overrides.resolveIdeSession } : {}),
+    ...(overrides.desktop ? { desktop: overrides.desktop } : {})
   });
 
   return { bridge, config, store, run, synthesize, transcribe, publish, tmpDir };
@@ -143,6 +146,31 @@ describe('CommandBridge', () => {
     await bridge.handlePrompt('42', 'hola', notifier);
 
     expect(resolveIdeSession).not.toHaveBeenCalled();
+  });
+
+  it('envia la orden a la ventana del IDE sin lanzar el CLI en modo desktop', async () => {
+    const desktop = { send: jest.fn(async () => ({ sent: true })) };
+    const { bridge, run, config } = await setup({ desktop });
+    config.devin.route = 'desktop';
+    const notifier = makeNotifier();
+
+    await bridge.handlePrompt('42', 'arregla el login', notifier);
+
+    expect(desktop.send).toHaveBeenCalledWith('arregla el login');
+    expect(run).not.toHaveBeenCalled();
+    expect(notifier.texts.join(' ')).toContain('enviada a la ventana');
+  });
+
+  it('cae al CLI si no puede escribir en la ventana del IDE', async () => {
+    const desktop = { send: jest.fn(async () => ({ sent: false, reason: 'SIN_VENTANA' })) };
+    const { bridge, run, config } = await setup({ desktop });
+    config.devin.route = 'desktop';
+    const notifier = makeNotifier();
+
+    await bridge.handlePrompt('42', 'arregla el login', notifier);
+
+    expect(run).toHaveBeenCalled();
+    expect(notifier.texts.join(' ')).toContain('No pude escribir en la ventana del IDE');
   });
 
   it('responde con el error sin romper el proceso', async () => {

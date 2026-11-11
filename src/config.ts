@@ -30,8 +30,8 @@ const schema = z.object({
   DEVIN_MODEL: z.string().trim().optional(),
   DEVIN_TIMEOUT_MS: z.coerce.number().int().positive().default(20 * 60 * 1000),
   DEVIN_CONTINUITY: z.enum(['auto', 'new', 'continue']).default('auto'),
-  /** auto: reanuda la sesion del IDE si el proyecto esta abierto alli. chat: sesion propia por chat. */
-  DEVIN_ROUTE: z.enum(['auto', 'chat']).default('auto'),
+  /** auto: reanuda la sesion del IDE; desktop: escribe en la ventana del IDE; chat: sesion propia. */
+  DEVIN_ROUTE: z.enum(['auto', 'desktop', 'chat']).default('auto'),
   DEVIN_EXTRA_ARGS: z.string().default(''),
   DEVIN_SESSIONS_DB: z.string().trim().optional(),
 
@@ -65,7 +65,9 @@ export interface AppConfig {
     model?: string;
     timeoutMs: number;
     continuity: 'auto' | 'new' | 'continue';
-    route: 'auto' | 'chat';
+    route: 'auto' | 'desktop' | 'chat';
+    /** Nombre de la carpeta del proyecto: prefijo del titulo de la ventana del IDE. */
+    projectName: string;
     extraArgs: string[];
     /** Base de sesiones del CLI, para resumir tareas lanzadas fuera del puente. */
     sessionsDb: string;
@@ -118,6 +120,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       timeoutMs: values.DEVIN_TIMEOUT_MS,
       continuity: values.DEVIN_CONTINUITY,
       route: values.DEVIN_ROUTE,
+      projectName: path.basename(path.resolve(values.DEVIN_WORKDIR ?? PROJECT_ROOT)),
       extraArgs: values.DEVIN_EXTRA_ARGS.split(' ').map((arg) => arg.trim()).filter(Boolean),
       sessionsDb: path.resolve(
         values.DEVIN_SESSIONS_DB ?? path.join(process.env.APPDATA ?? '', 'devin', 'cli', 'sessions.db')

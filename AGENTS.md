@@ -17,7 +17,7 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
 | `npm run tray:lint` | valida la sintaxis de `scripts/tray.ps1` |
 | `npm run tray:install` / `tray:uninstall` | alta/baja del arranque con Windows |
 | `npm run typecheck` | `tsc --noEmit` (obligatorio antes de dar algo por terminado) |
-| `npm test` | jest + ts-jest (102 pruebas) |
+| `npm test` | jest + ts-jest (109 pruebas) |
 | `npm run smoke` | pipeline de audio real: TTS -> OGG/Opus -> whisper.cpp -> texto |
 | `npm run check:telegram` | valida el token del bot y avisa si hay webhook (incompatible con long polling) |
 | `npm run check:devin` | ejecuta una orden real por el mismo runner que usa el bot |
@@ -88,7 +88,17 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
   cuyo `working_directory` coincida con `DEVIN_WORKDIR` (rutas normalizadas, sin distinguir
   mayusculas) y que no sea del propio puente; si esta idle, la orden se ejecuta con
   `--resume <id>`. Verificado que `--resume <sesion-del-IDE> -p` funciona y escribe en esa sesion.
-  **No existe** forma de inyectar un prompt en una ventana abierta: `devin <ruta>` solo abre la app.
+- **Enrutado al escritorio** (`DEVIN_ROUTE=desktop`, `scripts/send-to-desktop.ps1`): escribe en el
+  compositor de la ventana del IDE con UI Automation. Datos comprobados:
+  - Las ventanas de Devin Desktop se titulan `<carpeta> - Devin` (varias en un mismo proceso).
+  - `ControlViewWalker` no expone el DOM; hay que usar **`RawViewWalker`**.
+  - El compositor es un `ControlType.Edit` con `Name = 'Prompt'` y soporta `ValuePattern` (escribir
+    sin teclas). `SetFocus()` sobre el elemento funciona aunque `SetForegroundWindow` falle.
+  - **Nunca usar `SendKeys` a ciegas**: un `Ctrl+L` con el foco mal puesto acabo en la barra de
+    direcciones de un Chromium. Solo se pulsa Enter tras verificar el texto y el foco.
+  - El valor del `ValuePattern` incluye el placeholder cuando esta vacio: comparar contra el texto
+    enviado, no contra cadena vacia.
+  - `-DryRun` detecta ventana y control; `-NoSubmit` escribe, verifica y borra (pruebas sin enviar).
 
 ## Convenciones del proyecto
 

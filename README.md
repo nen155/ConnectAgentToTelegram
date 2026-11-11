@@ -160,6 +160,33 @@ Si esa sesión está ocupada, el puente no la invade: abre una nueva y lo advier
 > sesión: el turno se ejecuta en el proceso CLI y queda en esa conversación, pero no se ve escribirse
 > en la ventana. Si prefieres no mezclar contextos, pon `DEVIN_ROUTE=chat`.
 
+### Enrutado al escritorio: escribir en la ventana del IDE
+
+Con `DEVIN_ROUTE=desktop` el puente **sí escribe en la ventana**: usa UI Automation de Windows para
+localizar la ventana cuyo título empieza por el nombre del proyecto (`<proyecto> - Devin`) y el control
+`Prompt` de su compositor, escribe la orden y la envía.
+
+Cómo se hace, y por qué así:
+
+1. Se busca la ventana **por proyecto**, no por posición ni por foco: `Silver Utilizar Silver CD 2 ISO - Devin`.
+2. Se localiza el control `Edit` llamado `Prompt` en el árbol de accesibilidad de esa ventana.
+3. Se escribe con `ValuePattern` (API de accesibilidad), **no con teclas a ciegas**.
+4. Se verifica que el texto está realmente en el compositor y que el foco sigue ahí; solo entonces se
+   pulsa Enter. Si algo no cuadra, no se envía nada.
+5. Si la ventana o el control no aparecen, la orden cae al CLI y el resumen lo advierte.
+
+El trabajo ocurre en la ventana, así que el resumen no es inmediato: lo entrega el monitor de sesiones
+cuando ese turno termina.
+
+Requisitos y efectos:
+
+- La ventana tiene que estar **abierta** y su título empezar por el nombre de la carpeta de
+  `DEVIN_WORKDIR`.
+- El puente **roba el foco** un instante para escribir. Si estás tecleando en ese momento, molesta.
+- Si el IDE cambia su árbol de accesibilidad (o el control deja de llamarse `Prompt`), el enrutado
+  fallará y caerá al CLI: no rompe nada, pero pierde la función.
+- No se toca el portapapeles.
+
 ## Bandeja del sistema (Windows)
 
 ```powershell
@@ -202,7 +229,7 @@ Todo se ajusta en `.env` (ver `.env.example`). Lo importante:
 | `DEVIN_WORKDIR` | raíz del proyecto | Carpeta donde trabaja el agente |
 | `DEVIN_PERMISSION_MODE` | `dangerous` | `normal`, `accept-edits`, `smart`, `dangerous` |
 | `DEVIN_CONTINUITY` | `auto` | `auto` (reanuda), `new` (sin memoria), `continue` |
-| `DEVIN_ROUTE` | `auto` | `auto`: reanuda la sesión del IDE del proyecto; `chat`: sesión propia por chat |
+| `DEVIN_ROUTE` | `auto` | `auto`: reanuda la sesión del IDE; `desktop`: escribe en la ventana del IDE; `chat`: sesión propia por chat |
 | `DEVIN_TIMEOUT_MS` | 20 min | Corte de seguridad por orden |
 | `DEVIN_MODEL` | el del CLI | Alias o nombre de modelo |
 | `DEVIN_SESSIONS_DB` | `%APPDATA%\devin\cli\sessions.db` | Base de sesiones para resumir tareas externas |
@@ -259,7 +286,7 @@ tests/                  pruebas unitarias (jest + ts-jest)
 ```bash
 npm run dev         # recarga al guardar
 npm run typecheck   # tsc --noEmit
-npm test            # 102 pruebas
+npm test            # 109 pruebas
 npm run demo        # pipeline completo con mocks
 npm run smoke       # pipeline de audio real (requiere whisper + ffmpeg)
 ```
