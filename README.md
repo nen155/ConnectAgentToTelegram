@@ -161,11 +161,41 @@ npm run check:agent      # ejecuta una orden real por el adaptador del agente (A
   antes de ejecutar.
 - `/new` — empieza un hilo limpio (olvida la sesión anterior).
 - `/status` — carpeta de trabajo, permisos, cola, sesión y comprobaciones pendientes.
+- `/procesos` — qué está ejecutando el agente ahora mismo, con un botón para detener cada uno.
 - `/voices` — voces TTS instaladas (para elegir `TTS_VOICE`).
 - `/help` — ayuda.
 
 Las órdenes de un mismo chat se ejecutan **en cola y en orden**. Chats distintos no se bloquean
 entre sí.
+
+### "¿Por qué tarda tanto?" y detener un proceso
+
+Si preguntas por la lentitud (*"¿por qué tarda tanto?"*, *"está tardando mucho"*, *"¿qué está
+haciendo?"*), el bot no lanza otra orden: te contesta con lo que hay en marcha y un teclado para
+pararlo.
+
+```
+🔎 Procesos del agente en marcha (2):
+
+• PID 10544 · Devin · 12m 30s
+  "arregla el login del panel"
+• PID 8160 · devin (fuera del puente) · 3m
+  "devin --print -- ..."
+
+Pulsa uno para detenerlo. Detener una orden corta el trabajo en curso.
+
+[⛔ 10544 · Devin · 12m 30s]
+[⛔ 8160 · devin · 3m]
+[🔄 Actualizar]
+```
+
+- Solo se listan los procesos del **CLI del agente**: la app de Devin Desktop se excluye a propósito
+  (se reconoce por ruta), para que nadie la cierre desde el chat.
+- Al pulsar un botón se hace `taskkill /T /F` sobre ese árbol de procesos y se refresca la lista.
+- El pid se registra en el momento de lanzar la orden (`onSpawn`), así que los procesos del puente
+  llevan su orden; los de la terminal del IDE aparecen como *(fuera del puente)* con su línea de
+  comandos.
+- La misma información está en `data/status.json` (`processes`) para el panel de la bandeja.
 
 Al terminar, el resumen cierra con `🟢 Esperando nuevas ordenes.` o `⏳ Quedan N orden(es) en cola.`
 No se envía la salida completa del agente: el texto se resume conservando el principio (contexto) y el
@@ -283,10 +313,12 @@ agente y cuánto lleva. **Doble clic** abre el panel de actividad:
 - **Tareas en curso**: cada orden con su estado (`Trabajando`, `En cola`, `Respondiendo`), tiempo y
   sesión. Las que no lanzó el bot aparecen como `Otra sesion - Trabajando`.
 - **Tareas recientes**: últimas 8 con duración, sesión y el error si falló.
-- **Sesiones de Devin (IDE y CLI)**: todas las sesiones recientes con su título, estado y tiempo desde
+- **Sesiones del agente (IDE y CLI)**: todas las sesiones recientes con su título, estado y tiempo desde
   la última actividad.
+- **Procesos del agente en marcha**: pid, agente, tiempo y si lo lanzó el puente o ya estaba. Selecciona
+  una fila y pulsa **Detener proceso** para cortarlo (pide confirmación).
 - Casilla **Iniciar con Windows** para activar o quitar el arranque automático sin salir del panel.
-- Botones para actualizar, reiniciar o detener el puente y abrir el log.
+- Botones para actualizar, reiniciar o detener el puente, detener un proceso y abrir el log.
 
 Otros comandos:
 
@@ -397,7 +429,7 @@ tests/                  pruebas unitarias (jest + ts-jest)
 ```bash
 npm run dev         # recarga al guardar
 npm run typecheck   # tsc --noEmit
-npm test            # 165 pruebas
+npm test            # 174 pruebas
 npm run demo        # pipeline completo con mocks
 npm run smoke       # pipeline de audio real (requiere whisper + ffmpeg)
 ```

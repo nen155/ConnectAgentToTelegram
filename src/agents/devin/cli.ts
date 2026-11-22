@@ -151,7 +151,8 @@ export class DevinCli implements AgentCli {
     const result = await this.exec(this.options.bin, args, {
       cwd: request.cwd,
       timeoutMs: request.timeoutMs,
-      env: devinEnv()
+      env: devinEnv(),
+      onSpawn: request.onSpawn
     });
 
     const durationMs = Date.now() - startedAt;

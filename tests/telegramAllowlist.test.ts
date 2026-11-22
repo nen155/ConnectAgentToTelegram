@@ -10,13 +10,29 @@ type BotInstance = ReturnType<typeof createTelegramBot>;
 type TelegramUpdate = Parameters<BotInstance['handleUpdate']>[0];
 
 function makeConfig(allowed: number[]): AppConfig {
+  const scripts = { desktop: 'd.ps1', terminal: 't.ps1' };
   return {
     telegram: { token: '123:token-de-prueba', allowedUserIds: allowed },
-    devin: { bin: 'devin', workdir: '.', permissionMode: 'dangerous', timeoutMs: 1000, continuity: 'auto', route: 'auto', projectName: 'mi-proyecto', extraArgs: [], sessionsDb: 'sessions.db' },
+    agent: {
+      name: 'devin',
+      label: 'Devin',
+      workdir: '.',
+      projectName: 'mi-proyecto',
+      timeoutMs: 1000,
+      continuity: 'auto',
+      route: 'auto'
+    },
+    agents: {
+      devin: { bin: 'devin', permissionMode: 'dangerous', extraArgs: [], sessionsDb: 'sessions.db', windowSuffix: ' - Devin', scripts },
+      opencode: { bin: 'opencode', skipPermissions: true, extraArgs: [], sessionsDb: 'opencode.db', windowSuffix: ' - Devin', terminalPattern: 'opencode', scripts },
+      codex: { bin: 'codex', fullAuto: true, skipGitRepoCheck: true, extraArgs: [], sessionsDir: 'codex', windowSuffix: ' - Devin', terminalPattern: 'codex', scripts },
+      claude: { bin: 'claude', permissionMode: 'bypassPermissions', extraArgs: [], projectsDir: 'claude', windowSuffix: ' - Devin', terminalPattern: 'claude', scripts },
+      openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' }
+    },
     whisper: { bin: 'w', model: 'm', language: 'es', threads: 1, timeoutMs: 1000 },
     tts: { enabled: false, rate: 0, maxChars: 100 },
     ffmpegBin: 'ffmpeg',
-    paths: { data: '.', tmp: '.', sessionsFile: 's.json', logFile: 'l.log', ttsScript: 's.ps1', statusFile: 'st.json', replyRoutesFile: 'rr.json' },
+    paths: { data: '.', tmp: '.', sessionsFile: 's.json', logFile: 'l.log', ttsScript: 's.ps1', statusFile: 'st.json', replyRoutesFile: 'rr.json', sendToDesktopScript: 'd.ps1', sendToTerminalScript: 't.ps1' },
     logLevel: 'error',
     summaryLanguage: '',
     mockMode: false
@@ -40,12 +56,30 @@ async function runUpdate(allowed: number[], update: TelegramUpdate) {
   const sent: string[] = [];
   const bridge = {
     handlePrompt: jest.fn(async () => undefined),
-    handleVoice: jest.fn(async () => undefined)
+    handleVoice: jest.fn(async () => undefined),
+    listProcesses: jest.fn(async () => [
+      {
+        pid: 4321,
+        agent: 'devin',
+        label: 'Devin',
+        prompt: 'arregla el login',
+        startedAt: Date.now() - 60_000,
+        source: 'bridge' as const
+      }
+    ]),
+    stopProcess: jest.fn(async () => ({ stopped: true }))
   } as unknown as CommandBridge;
 
   const bot = createTelegramBot({
     config: makeConfig(allowed),
     bridge,
+    agent: {
+      name: 'devin',
+      label: 'Devin',
+      cli: { run: jest.fn() },
+      sessions: null,
+      desktop: null
+    },
     store: new SessionStore('no-se-usa.json'),
     queue: new KeyedQueue(),
     logger: createLogger({ level: 'error' }),
@@ -89,5 +123,21 @@ describe('allowlist de Telegram', () => {
     const { bridge } = await runUpdate([999], textUpdate(999, '/comando-raro'));
 
     expect(bridge.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('responde a la pregunta por la lentitud con los procesos en marcha', async () => {
+    const { sent, bridge } = await runUpdate([999], textUpdate(999, '¿por qué tarda tanto?'));
+
+    expect(bridge.handlePrompt).not.toHaveBeenCalled();
+    expect(bridge.listProcesses).toHaveBeenCalled();
+    expect(sent.join(' ')).toContain('PID 4321');
+    expect(sent.join(' ')).toContain('Opciones:');
+  });
+
+  it('no lista procesos a un usuario no autorizado', async () => {
+    const { sent, bridge } = await runUpdate([111], textUpdate(999, '¿por qué tarda tanto?'));
+
+    expect(bridge.listProcesses).not.toHaveBeenCalled();
+    expect(sent.join(' ')).toContain('No autorizado');
   });
 });

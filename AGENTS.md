@@ -17,7 +17,7 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
 | `npm run tray:lint` | valida la sintaxis de `scripts/tray.ps1` |
 | `npm run tray:install` / `tray:uninstall` | alta/baja del arranque con Windows |
 | `npm run typecheck` | `tsc --noEmit` (obligatorio antes de dar algo por terminado) |
-| `npm test` | jest + ts-jest (165 pruebas) |
+| `npm test` | jest + ts-jest (174 pruebas) |
 | `npm run smoke` | pipeline de audio real: TTS -> OGG/Opus -> whisper.cpp -> texto |
 | `npm run check:telegram` | valida el token del bot y avisa si hay webhook (incompatible con long polling) |
 | `npm run check:agent` | ejecuta una orden real por el adaptador del agente (`AGENT`); `check:devin` es alias |
@@ -162,6 +162,27 @@ Node 22 + TypeScript (CommonJS). Windows para TTS y bandeja; el resto es portabl
   `-Expect` (patron por agente) antes de pegar. xterm no expone su contenido por UI Automation: no se
   puede verificar lo escrito, solo el foco. Sin terminal abierta no hay nada que probar: pendiente de
   validacion real.
+
+### Procesos: verlos y detenerlos
+
+- **El pid se registra al lanzar.** `runCommand` acepta `onSpawn(pid)`; los adaptadores lo reenvian y
+  `CommandBridge` lo guarda en `ProcessRegistry` (con la orden y el chat) y lo quita en el `finally`
+  de la tarea. `status.json` publica esos procesos en `processes`.
+- **Los de fuera del puente se leen con CIM** (`listExternalAgentProcesses`). El emparejamiento lo
+  calcula `agentProcessMatchers()`: si el binario es una ruta absoluta se compara `ExecutablePath`;
+  si es solo un nombre (esta en el PATH) se compara el nombre.
+- **Nunca se lista `Devin.exe` de la app de escritorio.** Se llama igual que el CLI y matarla rompe
+  el IDE: ademas de emparejar por ruta exacta, se filtra cualquier ejecutable bajo `\programs\devin\`.
+- **PowerShell `-Command` exige sentencias separadas por saltos de linea.** Unirlas con espacios da
+  "Token inesperado" y el script falla con codigo 1 (silencioso si no se mira el codigo).
+- **Solo se detienen pids de la lista.** `stopProcess(pid)` comprueba que el pid este en
+  `listProcesses()` antes de `taskkill /T /F`: un callback de Telegram no puede matar cualquier cosa.
+- **Telegram**: `/procesos` y la pregunta de lentitud (`isDelayQuestion`: sin acentos y mensaje de
+  60 caracteres como maximo, para no secuestrar ordenes) muestran el listado con botones
+  `proc:stop:<pid>` y `proc:list`. La allowlist del middleware tambien cubre los callbacks.
+- **Bandeja**: el panel tiene el grupo "Procesos del agente en marcha" con `$item.Tag = pid` y el
+  boton "Detener proceso" (pide confirmacion). La consulta CIM se cachea 5 s para no refrescar el
+  panel cada 2 s con una consulta lenta.
 
 ## Convenciones del proyecto
 

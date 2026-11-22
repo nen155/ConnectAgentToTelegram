@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { TaskSnapshot } from './taskRegistry';
 import type { SessionSnapshot } from './sessionMonitor';
+import type { AgentProcess } from './processRegistry';
 
 export type BridgeState = 'idle' | 'transcribing' | 'working' | 'replying';
 
@@ -10,8 +11,10 @@ export interface StatusSnapshot {
   current?: TaskSnapshot;
   active?: TaskSnapshot[];
   recent?: TaskSnapshot[];
-  /** Sesiones de Devin (IDE y CLI) con su estado, para el panel de la bandeja. */
+  /** Sesiones del agente (IDE y CLI) con su estado, para el panel de la bandeja. */
   sessions?: SessionSnapshot[];
+  /** Procesos del agente lanzados por el puente (pid, orden y tiempo). */
+  processes?: AgentProcess[];
 }
 
 export interface BridgeStatus extends Required<Omit<StatusSnapshot, 'current'>> {
@@ -37,6 +40,7 @@ export class StatusPublisher {
       active: snapshot.active ?? [],
       recent: snapshot.recent ?? [],
       sessions: snapshot.sessions ?? [],
+      processes: snapshot.processes ?? [],
       ...(snapshot.current ? { current: snapshot.current } : {})
     };
 

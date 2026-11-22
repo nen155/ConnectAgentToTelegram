@@ -24,6 +24,8 @@ export interface AgentRunRequest {
   allowContinue: boolean;
   cwd: string;
   timeoutMs: number;
+  /** Recibe el pid del proceso lanzado, para poder listarlo y detenerlo. */
+  onSpawn?: (pid: number) => void;
 }
 
 export interface AgentRunResult {

@@ -83,7 +83,8 @@ export class OpenCodeCli implements AgentCli {
 
     const result = await this.exec(this.options.bin, args, {
       cwd: request.cwd,
-      timeoutMs: request.timeoutMs
+      timeoutMs: request.timeoutMs,
+      onSpawn: request.onSpawn
     });
 
     const durationMs = Date.now() - startedAt;

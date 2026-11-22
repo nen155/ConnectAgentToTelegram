@@ -141,7 +141,7 @@ function Get-ActivityText {
 
     switch ($current.state) {
         'replying' { return "Enviando respuesta$suffix" }
-        default { return "Devin trabajando$suffix`: $(Limit-Text $current.prompt 45)" }
+        default { return "Agente trabajando$suffix`: $(Limit-Text $current.prompt 45)" }
     }
 }
 
@@ -157,6 +157,52 @@ function Format-Duration([double]$Ms) {
     $seconds = [int]($Ms / 1000)
     if ($seconds -lt 60) { return ('{0}s' -f $seconds) }
     return ('{0}m {1}s' -f [math]::Floor($seconds / 60), ($seconds % 60))
+}
+
+# Procesos del agente: los que publica el puente (con su orden) y los que corren fuera
+# (terminal del IDE). La consulta CIM es lenta (~200 ms), asi que se cachea unos segundos.
+$script:procCache = @()
+$script:procCacheAt = 0
+
+function Get-ExternalAgentProcesses {
+    $names = @('devin.exe', 'opencode.exe', 'codex.exe', 'claude.exe')
+    try {
+        $rows = Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $names -contains ([string]$_.Name).ToLower() }
+        foreach ($row in $rows) {
+            $started = 0
+            try { $started = ([DateTimeOffset]$row.CreationDate).ToUnixTimeMilliseconds() } catch { $started = 0 }
+            [pscustomobject]@{
+                pid       = [int]$row.ProcessId
+                label     = ([string]$row.Name) -replace '\.exe$', ''
+                prompt    = ''
+                startedAt = $started
+                source    = 'external'
+            }
+        }
+    } catch {
+        @()
+    }
+}
+
+function Get-AgentProcesses($Status) {
+    $tracked = @()
+    if ($Status -and $Status.processes) { $tracked = @($Status.processes) }
+
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    if (($now - $script:procCacheAt) -gt 5000) {
+        $script:procCache = @(Get-ExternalAgentProcesses)
+        $script:procCacheAt = $now
+    }
+
+    $trackedPids = @($tracked | ForEach-Object { [int]$_.pid })
+    $external = @($script:procCache | Where-Object { $trackedPids -notcontains [int]$_.pid })
+    return @($tracked) + @($external)
+}
+
+function Stop-AgentProcess([int]$TargetPid) {
+    & taskkill.exe /PID $TargetPid /T /F 2>&1 | Out-Null
+    $script:procCacheAt = 0
+    return ($LASTEXITCODE -eq 0)
 }
 
 function Get-TaskStateLabel([string]$State) {
@@ -304,7 +350,7 @@ $restartItem = New-Object System.Windows.Forms.ToolStripMenuItem 'Reiniciar puen
 [void]$menu.Items.Add($stopItem)
 [void]$menu.Items.Add($restartItem)
 
-$dashboardItem = New-Object System.Windows.Forms.ToolStripMenuItem 'Ver actividad (doble clic)'
+$dashboardItem = New-Object System.Windows.Forms.ToolStripMenuItem 'Ver actividad y procesos (doble clic)'
 [void]$menu.Items.Add($dashboardItem)
 
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
@@ -420,7 +466,7 @@ function Show-Dashboard {
     }
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = 'ConnectAgentToTelegram - actividad de Devin'
+    $form.Text = 'ConnectAgentToTelegram - actividad y procesos'
     $form.ClientSize = New-Object System.Drawing.Size 780, 430
     $form.StartPosition = 'CenterScreen'
     $form.Font = New-Object System.Drawing.Font 'Segoe UI', 9
@@ -446,10 +492,12 @@ function Show-Dashboard {
     [void]$list.Columns.Add('Sesion', 120)
     $groupActive = New-Object System.Windows.Forms.ListViewGroup 'Tareas en curso'
     $groupRecent = New-Object System.Windows.Forms.ListViewGroup 'Tareas recientes'
-    $groupProcs = New-Object System.Windows.Forms.ListViewGroup 'Sesiones de Devin (IDE y CLI)'
+    $groupProcs = New-Object System.Windows.Forms.ListViewGroup 'Sesiones del agente (IDE y CLI)'
+    $groupAgentProcs = New-Object System.Windows.Forms.ListViewGroup 'Procesos del agente en marcha'
     [void]$list.Groups.Add($groupActive)
     [void]$list.Groups.Add($groupRecent)
     [void]$list.Groups.Add($groupProcs)
+    [void]$list.Groups.Add($groupAgentProcs)
     $form.Controls.Add($list)
 
     $buttons = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -482,6 +530,13 @@ function Show-Dashboard {
     $logButton.Height = 30
     [void]$buttons.Controls.Add($logButton)
 
+    $stopProcessButton = New-Object System.Windows.Forms.Button
+    $stopProcessButton.Text = 'Detener proceso'
+    $stopProcessButton.Width = 130
+    $stopProcessButton.Height = 30
+    $stopProcessButton.Enabled = $false
+    [void]$buttons.Controls.Add($stopProcessButton)
+
     $closeButton = New-Object System.Windows.Forms.Button
     $closeButton.Text = 'Cerrar'
     $closeButton.Width = 90
@@ -503,7 +558,9 @@ function Show-Dashboard {
     $script:dashGroupActive = $groupActive
     $script:dashGroupRecent = $groupRecent
     $script:dashGroupProcs = $groupProcs
+    $script:dashGroupAgentProcs = $groupAgentProcs
     $script:dashStopButton = $stopButton
+    $script:dashStopProcessButton = $stopProcessButton
     $script:dashRestartButton = $restartButton
     $script:dashAutostart = $autostartCheck
 
@@ -594,8 +651,33 @@ function Show-Dashboard {
                 [void]$listView.Items.Add($item)
             }
 
-            $listView.EndUpdate()
+            $agentProcs = @(Get-AgentProcesses $status)
+            if ($agentProcs.Count -eq 0) {
+                $emptyAgent = New-Object System.Windows.Forms.ListViewItem 'No hay procesos del agente en marcha'
+                $emptyAgent.Group = $script:dashGroupAgentProcs
+                $emptyAgent.ForeColor = [System.Drawing.Color]::Gray
+                [void]$listView.Items.Add($emptyAgent)
+            }
 
+            foreach ($process in $agentProcs) {
+                $detail = ''
+                if ($process.prompt) { $detail = $process.prompt }
+                elseif ($process.commandLine) { $detail = $process.commandLine }
+                if (-not $detail) { $detail = $process.label }
+
+                $item = New-Object System.Windows.Forms.ListViewItem((Limit-Text $detail 160))
+                [void]$item.SubItems.Add(("PID {0} · {1}" -f $process.pid, $process.label))
+                $elapsed = Format-Elapsed $process.startedAt
+                if (-not $elapsed) { $elapsed = '-' }
+                [void]$item.SubItems.Add($elapsed)
+                if ($process.source -eq 'bridge') { [void]$item.SubItems.Add('puente') } else { [void]$item.SubItems.Add('externo') }
+                $item.Group = $script:dashGroupAgentProcs
+                # El pid viaja en el Tag: es lo que usa el boton para detener ese proceso.
+                $item.Tag = [int]$process.pid
+                [void]$listView.Items.Add($item)
+            }
+
+            $listView.EndUpdate()
             $script:dashAutostart.Checked = Test-Path $startupLnk
 
             $running = [bool]$bridgePid
@@ -626,6 +708,39 @@ function Show-Dashboard {
     })
     $logButton.add_Click({
         if (Test-Path $bridgeLog) { Start-Process notepad.exe $bridgeLog }
+    })
+
+    # Solo se puede detener una fila que tenga pid (las de procesos, no las de sesiones).
+    $list.add_SelectedIndexChanged({
+        try {
+            $selected = $script:dashList.SelectedItems
+            $script:dashStopProcessButton.Enabled = ($selected.Count -eq 1 -and $selected[0].Tag)
+        } catch { }
+    })
+
+    $stopProcessButton.add_Click({
+        try {
+            $selected = $script:dashList.SelectedItems
+            if ($selected.Count -ne 1 -or -not $selected[0].Tag) { return }
+
+            $targetPid = [int]$selected[0].Tag
+            $detail = Limit-Text $selected[0].Text 120
+            $question = "Detener el proceso $targetPid?`n`n$detail`n`nSe pierde el trabajo en curso de esa orden."
+            $answer = [System.Windows.Forms.MessageBox]::Show(
+                $question, 'ConnectAgentToTelegram', 'YesNo', 'Warning')
+            if ($answer -ne 'Yes') { return }
+
+            $ok = Stop-AgentProcess $targetPid
+            if ($ok) {
+                Write-TrayLog ("Proceso $targetPid detenido desde el panel")
+            } else {
+                Write-TrayLog ("No pude detener el proceso $targetPid")
+            }
+            & $script:dashRefresh
+            Update-Ui
+        } catch {
+            Write-TrayLog ("Error deteniendo el proceso: " + $_)
+        }
     })
     $stopButton.add_Click({
         try { Stop-Bridge; & $script:dashRefresh; Update-Ui } catch { Write-TrayLog ("Error al detener: " + $_) }

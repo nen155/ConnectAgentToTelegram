@@ -15,6 +15,8 @@ export interface CommandOptions {
   env?: NodeJS.ProcessEnv;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  /** Se llama con el pid del proceso lanzado: permite listarlo y detenerlo. */
+  onSpawn?: (pid: number) => void;
 }
 
 export class CommandError extends Error {
@@ -57,6 +59,8 @@ export function runCommand(bin: string, args: string[], options: CommandOptions 
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+
+    if (child.pid) options.onSpawn?.(child.pid);
 
     const timer = options.timeoutMs
       ? setTimeout(() => {

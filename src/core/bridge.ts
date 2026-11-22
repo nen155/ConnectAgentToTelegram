@@ -11,6 +11,15 @@ import { matchProject } from '../agents/projectMatch';
 import type { KeyedQueue } from './taskQueue';
 import type { BridgeState, StatusPublisher } from './statusPublisher';
 import { TaskRegistry, type TaskRecord } from './taskRegistry';
+import {
+  ProcessRegistry,
+  agentProcessMatchers,
+  listExternalAgentProcesses,
+  stopProcessByPid,
+  type AgentProcess,
+  type ProcessMatchers,
+  type StopResult
+} from './processRegistry';
 import type { SessionSnapshot } from './sessionMonitor';
 import { summarizeMessage } from './sessionDigest';
 import { formatDuration } from '../util/format';
@@ -55,6 +64,10 @@ export interface BridgeDeps {
   knownProjects?: () => Promise<string[]>;
   /** Guarda el proyecto asociado a un mensaje enviado, para enrutar respuestas. */
   rememberRoute?: (messageId: number, project: string) => void;
+  /** Procesos del agente fuera del puente (inyectable en pruebas). */
+  listExternal?: (matchers: ProcessMatchers) => Promise<AgentProcess[]>;
+  /** Mata un proceso por pid (inyectable en pruebas). */
+  killProcess?: (pid: number) => Promise<boolean>;
 }
 
 /** Formatea duraciones cortas para el resumen. */
@@ -81,6 +94,7 @@ export function buildSummary(text: string, durationMs: number, pending = 0, note
  */
 export class CommandBridge {
   private readonly registry = new TaskRegistry();
+  private readonly processes = new ProcessRegistry();
 
   constructor(private readonly deps: BridgeDeps) {}
 
@@ -235,7 +249,17 @@ export class CommandBridge {
           sessionId,
           allowContinue,
           cwd: config.agent.workdir,
-          timeoutMs: config.agent.timeoutMs
+          timeoutMs: config.agent.timeoutMs,
+          // El pid permite listar la orden en curso y detenerla desde Telegram o la bandeja.
+          onSpawn: (pid) =>
+            this.processes.add({
+              pid,
+              agent: config.agent.name,
+              label: config.agent.label,
+              prompt,
+              chatId,
+              startedAt
+            })
         });
 
         await this.deps.store.record(chatId, {
@@ -275,9 +299,56 @@ export class CommandBridge {
         this.registry.update(task.id, { state: 'error', finishedAt: Date.now(), error: message });
         await notifier.text(`❌ ${message}`);
       } finally {
+        // El proceso ya termino (o se detuvo): no debe seguir en la lista.
+        for (const process of this.processes.list()) {
+          if (process.chatId === chatId && process.startedAt === startedAt) this.processes.remove(process.pid);
+        }
         await this.publishStatus();
       }
     });
+  }
+
+  /**
+   * Procesos del agente en marcha: los que lanzo el puente (con su orden) y los que
+   * corren fuera (terminal del IDE). Es lo que se muestra al preguntar por la lentitud.
+   */
+  async listProcesses(): Promise<AgentProcess[]> {
+    const tracked = this.processes.list();
+    const { agents } = this.deps.config;
+    const matchers = agentProcessMatchers([
+      agents.devin.bin,
+      agents.opencode.bin,
+      agents.codex.bin,
+      agents.claude.bin
+    ]);
+
+    const listExternal = this.deps.listExternal ?? listExternalAgentProcesses;
+    const external = await listExternal(matchers);
+    const trackedPids = new Set(tracked.map((item) => item.pid));
+    return [...tracked, ...external.filter((item) => !trackedPids.has(item.pid))];
+  }
+
+  /**
+   * Detiene un proceso por pid. Solo se aceptan pids de la lista: un callback de
+   * Telegram no debe poder matar cualquier cosa.
+   */
+  async stopProcess(pid: number): Promise<StopResult> {
+    const known = await this.listProcesses();
+    const target = known.find((item) => item.pid === pid);
+    if (!target) return { stopped: false, reason: `el proceso ${pid} ya no esta en marcha` };
+
+    const killProcess = this.deps.killProcess ?? stopProcessByPid;
+    const stopped = await killProcess(pid);
+    if (stopped) {
+      this.processes.remove(pid);
+      this.deps.logger.warn('Proceso detenido por el usuario', {
+        pid,
+        agent: target.agent,
+        prompt: target.prompt.slice(0, 80)
+      });
+      await this.publishStatus();
+    }
+    return stopped ? { stopped: true } : { stopped: false, reason: 'no pude detenerlo' };
   }
 
   /** Estado global derivado de las tareas activas, para el icono de la bandeja. */
@@ -299,7 +370,8 @@ export class CommandBridge {
       recent,
       current,
       queue: active.filter((task) => task.state === 'queued').length,
-      sessions: this.deps.sessions?.() ?? []
+      sessions: this.deps.sessions?.() ?? [],
+      processes: this.processes.list()
     });
   }
 

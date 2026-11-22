@@ -104,6 +104,8 @@ async function setup(
       listWindows: () => Promise<Array<{ project: string; title: string }>>;
     };
     knownProjects?: () => Promise<string[]>;
+    listExternal?: (names: string[]) => Promise<Array<{ pid: number; agent: string; label: string; prompt: string; startedAt: number; source: 'external' }>>;
+    killProcess?: (pid: number) => Promise<boolean>;
   } = {}
 ) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bridge-'));
@@ -129,7 +131,9 @@ async function setup(
     status: { publish },
     ...(overrides.resolveIdeSession ? { resolveIdeSession: overrides.resolveIdeSession } : {}),
     ...(overrides.desktop ? { desktop: overrides.desktop } : {}),
-    ...(overrides.knownProjects ? { knownProjects: overrides.knownProjects } : {})
+    ...(overrides.knownProjects ? { knownProjects: overrides.knownProjects } : {}),
+    ...(overrides.listExternal ? { listExternal: overrides.listExternal } : {}),
+    ...(overrides.killProcess ? { killProcess: overrides.killProcess } : {})
   });
 
   return { bridge, config, store, run, synthesize, transcribe, publish, tmpDir };
@@ -278,6 +282,35 @@ describe('CommandBridge', () => {
 
     expect(run).toHaveBeenCalled();
     expect(notifier.texts.join(' ')).toContain('y no la pongo en cola');
+  });
+
+  it('solo detiene procesos que estan en la lista', async () => {
+    const killProcess = jest.fn(async () => true);
+    const { bridge } = await setup({
+      listExternal: async () => [
+        {
+          pid: 4242,
+          agent: 'devin',
+          label: 'devin',
+          prompt: '',
+          startedAt: Date.now() - 60_000,
+          source: 'external'
+        }
+      ],
+      killProcess
+    });
+
+    const processes = await bridge.listProcesses();
+    expect(processes.map((item) => item.pid)).toEqual([4242]);
+
+    // Un callback de Telegram no debe poder matar un pid que no esta en la lista.
+    const unknown = await bridge.stopProcess(111);
+    expect(unknown.stopped).toBe(false);
+    expect(killProcess).not.toHaveBeenCalled();
+
+    const known = await bridge.stopProcess(4242);
+    expect(known.stopped).toBe(true);
+    expect(killProcess).toHaveBeenCalledWith(4242);
   });
 
   it('responde con el error sin romper el proceso', async () => {

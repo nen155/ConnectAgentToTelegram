@@ -13,6 +13,7 @@ import { runCommand, stripAnsi } from '../util/process';
 import { formatReadiness, inspectReadiness } from '../readiness';
 import { markdownToTelegramHtml } from './format';
 import type { ReplyRouteStore } from './replyRoutes';
+import type { AgentProcess } from '../core/processRegistry';
 
 const TELEGRAM_TEXT_LIMIT = 4000;
 
@@ -113,6 +114,68 @@ async function downloadVoiceFile(
   return destination;
 }
 
+const MAX_PROCESS_BUTTONS = 8;
+
+/**
+ * "¿Por qué tarda tanto?" no es una orden: es una pregunta sobre lo que hay en marcha.
+ * Se exige que el mensaje sea corto para no secuestrar ordenes que mencionen la lentitud.
+ */
+export function isDelayQuestion(text: string): boolean {
+  // Sin acentos ni signos: "¿por qué tarda tanto?" y "por que tarda tanto" son lo mismo.
+  const clean = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+  if (!clean || clean.length > 60) return false;
+  return (
+    /(por que|porque|pq)\s+(tarda|esta tardando|va lento|va tan lento|tarda tanto)/.test(clean) ||
+    /(esta|está)\s+tardando/.test(clean) ||
+    /tarda\s+(tanto|mucho)/.test(clean) ||
+    /que\s+esta\s+haciendo/.test(clean)
+  );
+}
+
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (minutes < 60) return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+/** Texto del listado de procesos en marcha. */
+export function formatProcessList(processes: AgentProcess[], now = Date.now()): string {
+  if (processes.length === 0) {
+    return '🔎 No hay ningun proceso del agente en marcha ahora mismo.';
+  }
+
+  const lines = [`🔎 Procesos del agente en marcha (${processes.length}):`, ''];
+  for (const process of processes.slice(0, 10)) {
+    const elapsed = formatElapsed(now - process.startedAt);
+    const origin = process.source === 'bridge' ? process.label : `${process.label} (fuera del puente)`;
+    lines.push(`• PID ${process.pid} · ${origin} · ${elapsed}`);
+    const detail = process.prompt.trim() || process.commandLine?.trim() || '';
+    if (detail) lines.push(`  "${detail.length > 90 ? `${detail.slice(0, 87)}...` : detail}"`);
+  }
+  if (processes.length > 10) lines.push(`… y ${processes.length - 10} mas`);
+  lines.push('', 'Pulsa uno para detenerlo. Detener una orden corta el trabajo en curso.');
+  return lines.join('\n');
+}
+
+function processKeyboard(processes: AgentProcess[], now = Date.now()) {
+  const rows = processes.slice(0, MAX_PROCESS_BUTTONS).map((process) => [
+    {
+      text: `⛔ ${process.pid} · ${process.label} · ${formatElapsed(now - process.startedAt)}`,
+      callback_data: `proc:stop:${process.pid}`
+    }
+  ]);
+  rows.push([{ text: '🔄 Actualizar', callback_data: 'proc:list' }]);
+  return { inline_keyboard: rows };
+}
+
 export function createTelegramBot(deps: BotDeps): Bot {
   const { config, bridge, store, queue, logger, replyRoutes, agent } = deps;
   const bot = new Bot(config.telegram.token);
@@ -186,6 +249,42 @@ export function createTelegramBot(deps: BotDeps): Bot {
     );
   });
 
+  const renderProcesses = async (ctx: Context, mode: 'reply' | 'edit'): Promise<void> => {
+    try {
+      const processes = await bridge.listProcesses();
+      const text = formatProcessList(processes);
+      const replyMarkup = processKeyboard(processes);
+
+      if (mode === 'edit' && ctx.callbackQuery?.message) {
+        await ctx.editMessageText(text, { reply_markup: replyMarkup });
+        return;
+      }
+      await sendLongText(ctx, text);
+      await ctx.reply('Opciones:', { reply_markup: replyMarkup });
+    } catch (error) {
+      logger.warn('No pude listar los procesos', error);
+      await ctx.reply('No pude leer los procesos en marcha.');
+    }
+  };
+
+  bot.command('procesos', async (ctx) => {
+    await renderProcesses(ctx, 'reply');
+  });
+
+  bot.callbackQuery('proc:list', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await renderProcesses(ctx, 'edit');
+  });
+
+  bot.callbackQuery(/^proc:stop:(\d+)$/, async (ctx) => {
+    const pid = Number(ctx.match?.[1]);
+    const result = await bridge.stopProcess(pid);
+    await ctx.answerCallbackQuery(
+      result.stopped ? `Detenido el proceso ${pid}` : result.reason ?? 'No pude detenerlo'
+    );
+    await renderProcesses(ctx, 'edit');
+  });
+
   bot.on(['message:voice', 'message:audio'], async (ctx) => {
     const chatId = String(ctx.chat.id);
     const fileId = ctx.message.voice?.file_id ?? ctx.message.audio?.file_id;
@@ -209,6 +308,12 @@ export function createTelegramBot(deps: BotDeps): Bot {
     const chatId = String(ctx.chat.id);
     const text = ctx.message.text.trim();
     if (!text || text.startsWith('/')) return;
+
+    // "¿Por qué tarda tanto?" se responde con lo que hay en marcha, no como orden nueva.
+    if (isDelayQuestion(text)) {
+      await renderProcesses(ctx, 'reply');
+      return;
+    }
 
     const notifier = createNotifier(ctx);
     void bridge
